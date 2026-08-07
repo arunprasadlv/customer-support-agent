@@ -86,6 +86,31 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
   - Overall crew execution timeout aligned to NFR-002 ("a few seconds"); a hard ceiling (e.g., `max_execution_time`) is set at the crew level so a stuck run degrades to a simulated escalation rather than hanging indefinitely — exact seconds value deferred to `@backend.eng` tuning, recorded here as an Open Question.
 - **Performance budgets**: `max_iter <= 12` per task per adapter-crewai.md baseline (most tasks here are single-shot, well under this ceiling); `max_rpm` set at crew level for budget stability (adapter-crewai.md).
 
+**Task dependency diagram**:
+
+```mermaid
+flowchart TD
+    Start(["Inquiry received<br/>(chat or simulated email)"]) --> T1
+
+    T1["1. redact_pii_task<br/>(pii_guard)"] --> T2
+    T1 --> T4
+
+    T2["2. classify_task<br/>(query_classifier)"] --> T3
+    T3["3. retrieve_knowledge_task<br/>(knowledge_retriever)"] --> T5
+    T4["4. analyze_sentiment_task<br/>(sentiment_analyzer)"] --> T5
+    T4 --> T6
+
+    T5["5. compose_response_task<br/>(response_composer)"] --> T6
+    T3 --> T6
+    T6["6. escalation_decision_task<br/>(escalation_manager)"] --> T7
+    T7["7. log_interaction_task<br/>(interaction_logger)"] --> End(["Response returned<br/>+ interaction logged<br/>(+ review-queue enqueue if escalated)"])
+
+    classDef failClosed stroke:#c0392b,stroke-width:2px
+    class T1 failClosed
+```
+
+*Note: `pii_guard` (task 1) is fail-closed — if it errors, the pipeline halts before any downstream task runs (see Error handling above), which is why every other task depends transitively on it.*
+
 **Runtime-Conditional Configuration (crewai)**:
 
 - **Crew composition**: one crew, seven agents (six task agents + logger), instantiated once per process and reused across `kickoff()` calls (agents are stateless; no per-agent memory per NFR-005/reproducibility default).
@@ -172,6 +197,47 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
 6. Frontend renders the response (and, if `escalated: true`, the escalation banner per AC-003).
 7. Separately, the ops `/ops` view polls `GET /api/interactions` and `GET /api/review-queue` to display logs and pending KB candidates; Reviewer actions call the approve/reject endpoints, which are the **only** write path to the `kb_entry` table (NFR-008).
 
+**Diagram — request/response path and Reviewer flow**:
+
+```mermaid
+sequenceDiagram
+    actor Guest
+    participant FE as Frontend (/chat, /inbox)
+    participant API as Backend API (FastAPI)
+    participant Crew as CrewAI Crew (7-task pipeline)
+    participant DB as SQLite
+
+    Guest->>FE: submit inquiry
+    FE->>API: POST /api/inquiries
+    API->>Crew: crew.kickoff(inputs)
+    Note over Crew: redact → classify → retrieve →<br/>sentiment → compose → escalate → log
+    Crew->>DB: write interaction_log<br/>(+ review_queue_entry if escalated)
+    Crew-->>API: final task outputs
+    API-->>FE: response JSON (classification, sentiment,<br/>response_text, escalated)
+    FE-->>Guest: render response / escalation banner
+
+    actor HotelOps as Hotel Ops
+    actor Reviewer
+    participant OpsUI as /ops view
+
+    HotelOps->>OpsUI: view interaction log
+    OpsUI->>API: GET /api/interactions
+    API->>DB: read interaction_log
+    DB-->>API: log rows
+    API-->>OpsUI: log listing
+    OpsUI-->>HotelOps: render log table
+
+    Reviewer->>OpsUI: open review queue
+    OpsUI->>API: GET /api/review-queue
+    API->>DB: read review_queue_entry (pending)
+    DB-->>API: pending entries
+    API-->>OpsUI: queue listing
+    Reviewer->>OpsUI: approve / edit / reject
+    OpsUI->>API: POST /api/review-queue/{id}/approve|reject
+    API->>DB: write kb_entry
+    Note over API,DB: only path that writes kb_entry (ADR-005, NFR-008)
+```
+
 **External tool/API integrations required for MVP**: none beyond the LLM provider used by CrewAI agents for classification/sentiment/composition reasoning (exact provider TBD — see Open Questions). No real helpdesk/CRM, no real SMTP/IMAP, no real KB/vector store — all mocked/local per PRD §3.
 
 **Domain configuration data flow**: the active domain configuration (JSON, schema-validated) is loaded at backend startup from a config path (e.g., `domain-configs/hotel.json`), validated against a JSON Schema, and made available to `query_classifier` (taxonomy) and `knowledge_retriever` (KB content/path) and to prompt templates used by `response_composer` (FR-012/FR-013). This load path is entirely separate from `config/agents.yaml`/`config/tasks.yaml` — reinforces ADR-001.
@@ -230,6 +296,45 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
 **Element catalog**: Frontend SPA; API layer; Crew (agents listed in §2); Domain Config loader/validator; SQLite store; Trace Log/Prompt Trace sink (adapter-crewai.md Logging).
 **Rationale/analysis**: The Domain Configuration layer is drawn as a distinct element (not folded into the Crew) specifically to make FR-012's boundary architecturally visible and reviewable (AC-009). The Persistence layer is deliberately thin (one file-based store) to match MVP scale (ADR-008).
 
+**Diagram**:
+
+```mermaid
+flowchart TD
+    subgraph FE["(1) Frontend SPA"]
+        Chat["/chat"]
+        Inbox["/inbox"]
+        Ops["/ops"]
+    end
+
+    subgraph BEAPI["(2) Backend API layer (FastAPI)"]
+        API["Request validation<br/>crew invocation<br/>response mapping"]
+    end
+
+    subgraph CrewLayer["(3) CrewAI Crew — sequential pipeline"]
+        Agents["7 agents<br/>(pii_guard, query_classifier, knowledge_retriever,<br/>sentiment_analyzer, response_composer,<br/>escalation_manager, interaction_logger)"]
+    end
+
+    subgraph DC["(4) Domain Configuration (JSON, swappable)"]
+        Config["taxonomy / kb_entries / prompts"]
+    end
+
+    subgraph Persist["(5) Persistence layer (SQLite)"]
+        ILog[(interaction_log)]
+        RQ[(review_queue_entry)]
+        KBT[(kb_entry)]
+    end
+
+    Chat --> API
+    Inbox --> API
+    Ops --> API
+    API --> Agents
+    Agents -. reads .-> Config
+    Agents --> ILog
+    Agents --> RQ
+    Ops -- "Reviewer approve/reject<br/>(only KB write path)" --> KBT
+    Agents -. reads .-> KBT
+```
+
 ### Process / Runtime View
 **Primary presentation**: See §6 Data Flow — one request thread per inquiry: HTTP request → validation → `crew.kickoff()` (synchronous, sequential task execution per §2's seven-step pipeline) → response mapping → HTTP response. Ops-view reads (`GET /api/interactions`, `GET /api/review-queue`) and Reviewer writes (`POST .../approve|reject`) are independent, asynchronous-to-the-crew request threads that only touch the persistence layer, never the crew directly.
 **Element catalog**: HTTP request thread (per inquiry); crew task execution sequence (7 tasks, §2); ops-view read/write threads.
@@ -240,6 +345,33 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
 **Element catalog**: `backend` container/process (Python, FastAPI, CrewAI, SQLite file mounted/persisted); `frontend` container/process (static React build served via a lightweight web server or dev server); `.env` file supplying secret env vars (never committed) per `.env.example`.
 **Rationale/analysis**: Matches PRD §3's "local/dev execution for MVP; no cloud target selected" and the template's "smallest MVP-appropriate target" guidance; concrete cloud hosting target remains `@devops.eng`'s Deliver-phase decision (Open Question below).
 
+**Diagram**:
+
+```mermaid
+flowchart LR
+    Browser["Browser<br/>(Guest / Hotel Ops / Reviewer)"]
+
+    subgraph Host["docker compose (or direct local run)"]
+        subgraph BESvc["backend service"]
+            FastAPIProc["FastAPI app"]
+            CrewProc["CrewAI crew (embedded)"]
+            SQLiteFile[("SQLite file")]
+            Health["GET /api/health"]
+        end
+        subgraph FESvc["frontend service"]
+            StaticFE["Static React build"]
+        end
+        EnvFile[".env<br/>(secrets, never committed)"]
+    end
+
+    Browser -->|HTTP| StaticFE
+    Browser -->|"HTTP /api/*"| FastAPIProc
+    FastAPIProc --> CrewProc
+    FastAPIProc --> SQLiteFile
+    FastAPIProc --> Health
+    EnvFile -. supplies secrets .-> FastAPIProc
+```
+
 ### Data View
 **Primary presentation**:
 - `domain_config` (file-based JSON, not a DB table): `{ "domain_id": string, "taxonomy": [...], "kb_entries": [...], "prompts": {...} }`, schema-validated at load time (FR-012, FR-013).
@@ -248,6 +380,48 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
 - `kb_entry` (SQLite table, part of the active KB used by `knowledge_retriever`): `kb_entry_id, domain_id, intent, content, source (seed|reviewer_approved), created_at`.
 **Element catalog**: domain_config (file), interaction_log, review_queue_entry, kb_entry (all SQLite).
 **Rationale/analysis**: `review_queue_entry.status` and the absence of any other write path to `kb_entry` from agent code together implement NFR-008/AC-011's integrity guarantee at the data-model level, not just as a policy statement.
+
+**Diagram**:
+
+```mermaid
+erDiagram
+    INTERACTION_LOG {
+        string interaction_id PK
+        datetime timestamp
+        string channel
+        string redacted_query
+        string intent
+        float confidence
+        float sentiment_score
+        string response_text
+        boolean escalated
+        string escalation_reason
+        string pii_redaction_summary
+    }
+    REVIEW_QUEUE_ENTRY {
+        string entry_id PK
+        string interaction_id FK
+        string original_query
+        string simulated_resolution
+        string status "pending | approved | rejected"
+        string reviewed_by
+        datetime reviewed_at
+        string edited_content
+    }
+    KB_ENTRY {
+        string kb_entry_id PK
+        string domain_id
+        string intent
+        string content
+        string source "seed | reviewer_approved"
+        datetime created_at
+    }
+
+    INTERACTION_LOG ||--o{ REVIEW_QUEUE_ENTRY : "escalation enqueues"
+    REVIEW_QUEUE_ENTRY ||--o| KB_ENTRY : "Reviewer approval creates (ADR-005, only write path)"
+```
+
+*`domain_config` (taxonomy/kb_entries/prompts) is a schema-validated JSON file, not a SQLite table, and seeds `kb_entry.content` at load time — see Data Architecture (§4) and Domain configuration data flow (§6).*
 
 ## Correspondence Rules Across Views
 - Every agent named in the Logical View's Crew element maps to exactly one task in the Process/Runtime View's execution sequence (1:1 agent-to-primary-task correspondence per §2 table).
@@ -348,3 +522,7 @@ Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the 
 - **Timestamp**: 2026-08-05
 - **Persona**: `system-arch`
 - **Action**: `create-sad` (follow-up: resolved the `/ops` authentication Open Question per stakeholder input — decided to keep `/ops` unauthenticated for MVP demo simplicity; updated Risks table mitigation and Open Questions accordingly, no other architectural change)
+
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad` (follow-up: added Mermaid diagrams to §2 Task/Turn Orchestration, §6 Data Flow, and Logical/Deployment/Data Views for visual clarity — no architectural content changed, diagrams restate existing prose/tables)
