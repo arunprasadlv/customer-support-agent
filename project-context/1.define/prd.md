@@ -197,7 +197,7 @@ N/A — internal/portfolio demonstration project, not a commercial launch. See A
 - MRD was skipped because this is an internal/portfolio project (per `usecase.txt` "Selection Considerations": a technical-mastery exercise in coordinated multi-agent systems), not a funded product launch requiring market sizing — per the `product-mgr` persona's own guidance to skip MRD for internal/personal tools when appropriate.
 - The `usecase.txt` industry benchmark figures (resolution-time reduction, CSAT, cost savings, daily interaction volume) are treated as market-opportunity framing, not MVP acceptance targets, consistent with `system-description.md` §6 Assumptions.
 - Single language/locale (English) assumed for the hotel domain content, since none was specified.
-- Whether `pii_guard` is implemented as a dedicated CrewAI agent or a shared pre/post-processing utility is left open — either satisfies FR-011, and the choice is an implementation detail for `@system-arch`/`@backend-eng`.
+- `pii_guard` is implemented as a dedicated CrewAI agent, not a shared utility (stakeholder-confirmed, 2026-08-05).
 
 ## Open Questions
 
