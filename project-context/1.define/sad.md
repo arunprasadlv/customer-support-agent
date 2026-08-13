@@ -1,528 +1,274 @@
-# AAMAD MVP System Architecture Document (SAD) Template
-
-## Context & Instructions
-Generate a system architecture specification for a multi-agent MVP.
-Align agent and API design with the runtime selected via `AAMAD_TARGET_RUNTIME` (`crewai` | `claude-agent-sdk` | `cursor-sdk`) and the active adapter rule.
-Frontend stack defaults to a modern web chat UI when the PRD does not specify otherwise; do not hardcode a single vendor UI library as mandatory unless the PRD/SAD decisions require it.
-This document is the blueprint for Build-phase personas. Prefer lean MVP views; defer nonessential NFRs to Future Work.
+# System Architecture Document (SAD) — customer-support-agent
 
 ## Input Requirements
 
 **PRD Document**: `project-context/1.define/prd.md`
-**MRD** (optional): N/A — not commissioned (internal/portfolio project; see `prd.md` §"Input Requirements" and Assumptions). See this document's Assumptions/Open Questions for the resulting architectural risk.
-**User Stories** (when present): N/A — no `project-context/1.define/user-stories/` directory exists at time of writing. Traceability below uses PRD/system-description FR/NFR/AC IDs instead. See Open Questions.
-**MVP Scope**: Focus on core value proposition (80/20) — the four in-scope Hotel/Hospitality scenario categories (reservations & booking, check-in/check-out & billing, room service & amenities, general complaints) across chat and simulated email, with PII redaction and human-curated KB feedback loop as first-class MVP concerns (not deferred).
-**Selected Runtime**: crewai
+**MRD**: N/A — skipped (internal/portfolio project; see PRD Assumptions)
+**User Stories**: Not yet created (`project-context/1.define/user-stories/` is empty)
+**MVP Scope**: Core value proposition only — hotel-domain support crew across chat + simulated email, with PII redaction and a human-curated KB feedback loop
+**Selected Runtime**: crewai (from `aamad.config.yml` → `runtime.target`, confirmed by `AAMAD_TARGET_RUNTIME=crewai`)
 
-## System Architecture Specification — Generate All Sections
+## System Architecture Specification
 
 ### 1. MVP Architecture Philosophy & Principles
 
-**MVP Design Principles**:
+**MVP Design Principles**
 
-- **Context-first, explainable by construction**: every response must be traceable to its inputs (classification, retrieved KB snippet(s), sentiment score) — mirrors PRD §6 "Agent Interaction Design" and satisfies NFR-003 (Observability) and AC-004.
-- **Domain-agnostic core, config-driven specialization**: core CrewAI agent/task code contains no domain-specific strings or logic; all taxonomy, KB content, and prompts are supplied by an external, schema-validated JSON domain configuration (FR-012, FR-013, NFR-007, AC-008, AC-009). This is the single most important architectural constraint in this SAD — see ADR-001.
-- **Human-in-the-loop for KB integrity**: no code path allows an agent to write to the live knowledge base. Candidate entries flow through a review queue; only the Reviewer persona's explicit approve/edit/reject action can update the KB (FR-014, NFR-008, AC-010, AC-011) — see ADR-005.
-- **Privacy-by-default**: PII detection/redaction is a mandatory pipeline step before any content is logged or sent to retrieval/LLM components, not an optional add-on (FR-011, NFR-004, NFR-006, AC-007) — see ADR-004.
-- **Minimal viable agent set and simplest orchestration that delivers core value**: one shared CrewAI crew, one `crew.kickoff()` per inquiry, sequential process — see ADR-002.
-- **Observable by default**: every interaction is logged (query, classification, sentiment, outcome, PII actions) to a locally inspectable store (NFR-003, NFR-006, AC-004).
-- **Automated deploy scaffolding from day 1 when Deliver phase is in scope**: deferred to `@devops.eng` per PRD §8 Phase 3; hosting target is an explicit Open Question here (not decided by this SAD).
+- Deterministic behavior over agent autonomy wherever a wrong call has user-visible consequences (escalation, KB writes) — see ADR-001/ADR-002.
+- Minimal viable agent set: the reasoning-heavy sub-problem gets a small collaborative Crew (4 agents); everything else is either a dedicated single-purpose agent or plain deterministic code.
+- Observable by default: every inquiry produces one interaction-log record (classification, sentiment, PII actions, outcome).
+- No path exists to the live knowledge base except through explicit human approval (NFR-008) — this is enforced structurally, not by convention.
 
-**Core vs Future Features**:
+**Core vs Future Features**
 
-- **MVP** (P0, from PRD §4): chat intake + classification; knowledge-grounded response generation; sentiment-aware tone/escalation; simulated escalation; simulated email channel sharing the chat pipeline; PII redaction; domain-configurable Hotel/Hospitality content; human-curated KB feedback loop (record candidate → Reviewer approve/edit/reject).
-- **MVP** (P1): interaction logging of every processed inquiry.
-- **Future** (P2, explicit exclusions mirrored from PRD §4/system-description §8):
-  - Real helpdesk/CRM integration (Zendesk, Freshdesk, ServiceNow, Salesforce, etc.)
-  - Real email server integration (SMTP/IMAP, deliverability, spam/abuse handling)
-  - Live, continuously ingested knowledge base / vector store
-  - Fully autonomous (unreviewed) self-learning
-  - Voice and social-media channels
-  - Enterprise-scale load handling and formal SLA guarantees
-  - Authentication, multi-tenancy, formal regulatory certification (GDPR/HIPAA audit, DPA agreements)
-  - Fully built-out domain configurations for other verticals; multi-domain simultaneous operation
+- **MVP**: chat + simulated email intake, hotel-domain classification/retrieval/sentiment/response, simulated escalation, PII redaction, human-curated KB feedback loop, JSON domain configuration.
+- **Future**: real email/helpdesk integration, live KB, other verticals, voice/social channels, enterprise scale, formal compliance certification. (Full list: PRD §4 P2.)
+- All deferrals inherited directly from `prd.md` — no new deferrals introduced here.
 
-**Technical Architecture Decisions**:
+**Technical Architecture Decisions**
 
-- **Frontend framework**: PRD does not mandate a specific frontend framework/library (§6 only specifies "single-page web chat widget plus a simple simulated inbox view", web-only). This SAD selects a lightweight React + Vite single-page app (see ADR-006) as the justified default — minimal build tooling, fast iteration for a 5-week single-developer timeline, no SSR/SEO requirement since this is an internal demo, not a public site.
-- **UI approach for human-agent interaction**: two logical surfaces in one SPA — (1) guest-facing chat widget + simulated inbox view, (2) ops-facing internal log/review view (interaction log + KB review queue with approve/edit/reject actions gated to the Reviewer persona). No authentication for MVP (Out of Scope per PRD §5/system-description §8), so the ops view is reachable but not access-controlled — recorded as a security risk/Open Question, not silently accepted.
-- **Runtime-specific agent communication pattern**: CrewAI sequential process with a shared context object (crew inputs dict) carrying `inquiry`, `channel`, `detected_intent`, `kb_snippets`, `sentiment_score`, `pii_redacted_content`, `escalation_flag` across tasks, chained via `Task.context` — see ADR-002 and §2.
-- **Streaming vs non-streaming**: non-streaming for MVP. NFR-002 targets "within a few seconds end-to-end", which does not require token-level streaming; a single synchronous (or polled-async) request/response per inquiry keeps the backend contract simple — see ADR-003. Streaming is noted as a Future Work UX enhancement.
+#### ADR-001: Orchestration pattern — Flow (top-level) with an embedded Crew (reasoning sub-problem)
+
+- **Context**: The PRD describes both a linear pipeline with hard conditional branches (escalation gate, channel routing, KB-approval gate) and a genuinely collaborative reasoning task (classify → retrieve → sentiment → compose). CrewAI offers two orchestration primitives for this: **Crew** (autonomous role-based delegation) and **Flow** (explicit, deterministic control flow with event-driven branching and state).
+- **Decision**: Use **Flow as the top-level orchestrator** for the whole inquiry lifecycle (intake, PII redaction, escalation branch, response delivery, logging). Use **Crew** only for the classify/retrieve/sentiment/compose sub-problem, invoked as a single step inside the Flow.
+- **Alternatives considered** (scored against 8 project-derived criteria, weighted 2–5 by how directly they trace to a Must-priority FR/NFR):
+
+  | Criterion (source) | Weight | Crew-only | Flow-only | Flow + embedded Crew |
+  |---|:-:|:-:|:-:|:-:|
+  | Deterministic branching — escalation gate (FR-006), channel routing (FR-009/010) | 5 | 2 | 5 | 5 |
+  | Human-approval integrity — KB only changes via Reviewer gate (FR-014, NFR-008) | 5 | 2 | 4 | 4 |
+  | Config-driven domain swap without core rewrite (FR-012, NFR-007) | 4 | 3 | 4 | 5 |
+  | Collaborative reasoning across specialized roles | 3 | 5 | 2 | 5 |
+  | Traceability/explainability (NFR-003, NFR-006) | 4 | 3 | 4 | 5 |
+  | Dev speed vs. 5-week timeline | 4 | 4 | 3 | 3 |
+  | Extensibility — new roles without rewrite (NFR-005) | 3 | 4 | 3 | 4 |
+  | Runtime maturity / lower risk | 2 | 5 | 3 | 3 |
+  | **Weighted total (of 150)** | | **97 (65%)** | **110 (73%)** | **130 (87%)** |
+
+- **Rationale**: The parts of this system where a wrong autonomous call is costly (escalation, KB writes) are exactly the parts that are logically `if/else`, not judgment calls — Flow's native `@router`/`@listen` model makes that determinism provable rather than emergent from agent delegation. Crew's strength (shared context, role delegation) is real but only needed for the reasoning block, where it scores highest.
+- **Consequences**: Two orchestration concepts to learn instead of one; slightly more boilerplate than a pure-Crew build. In exchange, the escalation and KB-approval paths are structurally guaranteed rather than dependent on an LLM manager agent behaving consistently.
+
+#### ADR-002: Escalation decision and interaction logging are deterministic Flow steps, not LLM agents
+
+- **Context**: `prd.md`'s Core Agent Definitions table names `escalation_manager` and `interaction_logger` as agents (that table is explicitly marked "indicative" — resolving it into a concrete runtime shape is this document's job). The SAD template caps MVP agent count at 3–4.
+- **Decision**: `escalation_manager` and `interaction_logger` are **not** CrewAI agents. The escalation decision is a Flow `@router` reading the classifier's confidence score and the sentiment agent's score (both already computed by the reasoning Crew) — no separate LLM call. Interaction logging is a plain Flow step that persists a record; it performs no reasoning.
+- **Rationale**: Neither task requires language understanding beyond what the reasoning Crew already produced — routing on a threshold and writing a log record are procedural. Collapsing them keeps the true agent count at the template's guideline (4-agent reasoning Crew) while still fully satisfying FR-006/FR-007/FR-008 as *behaviors* — the PRD does not require these to be LLM-backed, only that the behaviors happen.
+- **Consequences**: Faster and cheaper (no extra LLM calls on the hot path); escalation thresholds become an explicit, testable, tunable value rather than opaque agent judgment — directly supports AC-003 ("never fabricate, always flag clearly"). Trade-off: less flexible than an LLM judging escalation-worthiness in genuinely ambiguous cases.
+- **Status: Confirmed** (stakeholder-affirmed, 2026-08-05) — `escalation_manager`/`interaction_logger` stay deterministic Flow logic. Not revisited based on future QA results; if threshold tuning proves insufficient, the fix is adjusting the threshold values, not converting either into an LLM agent.
+
+#### ADR-003: PII Guard is a standalone dedicated agent, run before the reasoning Crew
+
+- **Context**: Stakeholder explicitly required a dedicated PII agent (not a shared utility, decided 2026-08-05). FR-011 requires redaction on "any content passed to the knowledge-retrieval **or LLM** components" — which includes the classifier, not just retrieval/logging.
+- **Decision**: `pii_guard` runs as its own Flow step immediately after intake normalization, **before** the reasoning Crew is invoked at all. It is not a member of the reasoning Crew — it's a security gate that must run unconditionally and first, independent of classification outcome.
+- **Rationale**: If PII redaction ran inside or after the reasoning Crew, raw PII would already have reached the classifier/retriever, violating FR-011's "any LLM component" wording. Running it first and standalone also makes it trivially auditable (NFR-006) as a single well-defined step.
+- **Consequences**: This is the 5th LLM-backed agent, one beyond the template's 3–4 guideline. Documented and justified here rather than silently exceeded — the reasoning Crew itself still holds to 4 agents (ADR-002 keeps the other two "agents" out of the LLM count entirely).
+
+**Net agent architecture**: 5 CrewAI agents total — a 4-agent reasoning Crew (`query_classifier`, `knowledge_retriever`, `sentiment_analyzer`, `response_composer`) plus 1 standalone agent (`pii_guard`), orchestrated by one Flow. `escalation_manager` and `interaction_logger` from the PRD's indicative table are realized as deterministic Flow logic, not agents.
+
+**Frontend**: React (Vite) single-page app — a chat widget, a simulated email "inbox" view, and an internal ops view (interaction log + KB review queue with Reviewer approve/edit/reject). Justification: PRD doesn't mandate a framework; React is the lowest-friction default for a 5-week single-developer build with three UI surfaces sharing one component library and one API client. Recorded as a SAD-level default, not a PRD requirement — see Assumptions.
+
+**Backend**: Python + FastAPI. Justification: matches CrewAI's Python runtime (no cross-language boundary), fast to scaffold a chat/email/review-queue API surface within the timeline, async-friendly for streaming responses later if needed.
+
+**Streaming**: Non-streaming for MVP — NFR-002's "a few seconds" target doesn't require token-level streaming; request/response is simpler to build and test within 5 weeks. Flagged as a Future Work candidate if response composition proves slow in practice.
 
 ### 2. Multi-Agent System Specification
 
-**Agent Architecture Requirements**:
+**Agent Architecture Requirements**
 
-The PRD's Core Agent Definitions table (§3) specifies six agents. This exceeds the template's "3–4 specialized agents maximum for MVP" guidance; this SAD deliberately retains all six because each maps to a distinct Must-priority FR and a distinct reasoning responsibility (classification, retrieval, sentiment, composition, escalation policy, PII protection) — collapsing any of them would blur the domain-agnostic/config-driven boundary (FR-012) or the PII-safety boundary (FR-011). See ADR-007 for the explicit deviation rationale. The KB-write step is intentionally NOT an agent (see below) to preserve NFR-008.
+| Agent | Membership | Role | Goal | Tools | Model | Memory |
+|---|---|---|---|---|---|---|
+| `query_classifier` | Reasoning Crew | Support Query Classifier | Classify inquiry into a domain-configured intent (FR-002) | domain taxonomy lookup (from JSON domain config) | `claude-haiku-4-5` | None — stateless per inquiry |
+| `knowledge_retriever` | Reasoning Crew | KB Retrieval Specialist | Retrieve grounding content for the classified intent (FR-003) | KB search (scoped to active domain config) | `claude-haiku-4-5` | None |
+| `sentiment_analyzer` | Reasoning Crew | Guest Sentiment Analyst | Score sentiment/frustration (FR-004) | sentiment scorer | `claude-sonnet-5` | None |
+| `response_composer` | Reasoning Crew | Response Composer | Compose tone-adjusted response from classification + retrieval + sentiment (FR-005); must not fabricate when KB has no match (AC-003) | — (LLM only) | `claude-sonnet-5` | None |
+| `pii_guard` | Standalone | PII Redaction Guard | Detect/redact PII before any other component sees the raw text (FR-011) | PII detector | `claude-haiku-4-5` | None |
 
-| Agent (CrewAI `Agent`) | Role | Goal | Tools | Memory/session | PRD Trace |
-|---|---|---|---|---|---|
-| `pii_guard` | PII Redaction Guard | Detect and redact/mask PII before any content reaches retrieval, LLM composition, or logs | `pii_detector` tool (regex/NER-based, domain-config-independent) | None (stateless per inquiry) | FR-011, NFR-004, NFR-006, AC-007 |
-| `query_classifier` | Support Query Classifier | Classify the (redacted) inquiry into a domain-configured intent/category | `taxonomy_lookup` tool (reads active domain config only) | None | FR-002, FR-012, AC-001, AC-008 |
-| `knowledge_retriever` | Knowledge Base Retrieval Specialist | Retrieve grounding KB content for the classified intent | `kb_search` tool (reads active domain config's KB path) | None | FR-003, FR-012, FR-013, AC-001, AC-003, AC-008 |
-| `sentiment_analyzer` | Guest Sentiment Analyst | Score sentiment/frustration in the (redacted) inquiry | `sentiment_scorer` tool | None | FR-004, AC-002 |
-| `response_composer` | Response Composer | Compose a tone-adjusted response from classification + retrieved KB + sentiment; must not fabricate when no KB match | LLM only, no tools | None | FR-005, AC-001, AC-003 |
-| `escalation_manager` | Escalation Manager | Decide and simulate handoff to a human when confidence is low or sentiment is highly negative; flag clearly | `escalation_flagger` tool | None | FR-006, AC-002, AC-003 |
-| `interaction_logger` | Interaction & Review-Queue Logger | Log every interaction (query, classification, sentiment, outcome, PII actions); on escalation, record the simulated human resolution and queue it as a candidate KB entry | `interaction_log_writer`, `review_queue_writer` tools | None | FR-007, FR-008, NFR-003, NFR-006, AC-004, AC-010 |
+Memory is deliberately **none/short-lived** for all agents (reproducibility per `aamad-core.md`; no cross-inquiry state needed for MVP). Least-privilege tool access: each agent gets only the tool(s) its row lists — `knowledge_retriever` cannot write to the KB (write access is Reviewer-only, ADR below), and no agent has network/file access beyond its named tool.
 
-Explicitly **not** an agent: the KB-approval step. Per FR-014/NFR-008, only the human Reviewer (via the ops UI, outside the crew) can promote a candidate review-queue entry into the live KB. No agent — including `interaction_logger` — has KB write access; it only enqueues candidates. This is the architectural control that satisfies AC-011.
+#### ADR-004: Per-agent model tier — Haiku 4.5 vs. Sonnet 5, split by task stakes
 
-**Task / Turn Orchestration**:
+- **Context**: CrewAI supports a distinct `llm` per agent; nothing requires all 5 agents to share one model. The 5 agents split cleanly by whether errors are cheap (classification, retrieval, PII pattern-matching) or feed a high-stakes downstream decision (sentiment → escalation gate; composition → guest-facing voice, AC-003).
+- **Decision**: `query_classifier`, `knowledge_retriever`, and `pii_guard` run on **`claude-haiku-4-5`** (fastest/cheapest tier — $1/$5 per MTok). `sentiment_analyzer` and `response_composer` run on **`claude-sonnet-5`** (near-Opus quality on instruction-following/groundedness — $3/$15 per MTok, introductory $2/$10 through 2026-08-31).
+- **Rationale**: `pii_guard` and `query_classifier` run unconditionally on every single inquiry (FR-011, FR-002) — cost and latency compound most there, and both tasks (pattern-based PII detection, classification against a small fixed taxonomy) are well within Haiku's capability. `sentiment_analyzer`'s score directly gates the escalation decision (FR-006/AC-002) — a lighter model under-calling frustration in a polite-but-furious message would silently degrade a Must-priority behavior, so the extra cost buys correctness on the one score that matters most. `response_composer` is the system's guest-facing voice and carries the AC-003 "never fabricate" bar — the highest quality requirement in the system.
+- **Consequences**: 3 of 5 model calls per inquiry run on the cheap/fast tier, which directly serves NFR-002 (a few seconds end-to-end across 5 sequential calls). No agent currently uses Opus 5 — the flagship tier has no slot in this architecture, since ADR-002 already moved the one place genuinely hard agentic judgment could have lived (escalation) out to deterministic code. Opus 5 remains the documented upgrade path if a future role needs real multi-step reasoning (e.g., cross-domain synthesis once a second vertical exists).
 
-- **Dependency/execution flow** (one `crew.kickoff()` per inquiry, chat or simulated email — FR-009/FR-010 share the pipeline):
-  1. `redact_pii_task` (`pii_guard`) — runs first on the raw inquiry; all downstream tasks and logs consume only the redacted form.
-  2. `classify_task` (`query_classifier`) — depends on (1); context = redacted inquiry.
-  3. `retrieve_knowledge_task` (`knowledge_retriever`) — depends on (2); context = classified intent + domain config KB path.
-  4. `analyze_sentiment_task` (`sentiment_analyzer`) — depends on (1); can run logically parallel to (2)/(3) but executed in sequence per ADR-002; context = redacted inquiry.
-  5. `compose_response_task` (`response_composer`) — depends on (2), (3), (4); context = intent + KB snippets + sentiment score.
-  6. `escalation_decision_task` (`escalation_manager`) — depends on (3), (4), (5); context = KB match confidence + sentiment score + composed response; outputs `escalation_flag` and, if true, a simulated handoff message.
-  7. `log_interaction_task` (`interaction_logger`) — depends on all prior tasks; always runs; writes the interaction log entry and, if escalated, writes a candidate review-queue entry (FR-008/AC-010).
-- **Expected outputs/data formats**: each task returns a structured (Pydantic/JSON) output — `RedactionResult`, `ClassificationResult`, `KBRetrievalResult`, `SentimentResult`, `ComposedResponse`, `EscalationDecision`, `LogEntry` — validated before being placed in the shared crew context, per adapter-crewai.md Quality Gates ("validate required template headings"/output contracts analog for runtime tasks).
-- **Context passing**: CrewAI `Task.context` chaining (explicit list of upstream tasks per adapter-crewai.md "Mapping"), not implicit shared memory — keeps dependency flow deterministic and auditable.
-- **Error handling, retries, cancellation/timeout**:
-  - Per-task `max_retry_limit >= 2` (adapter-crewai.md baseline).
-  - If `knowledge_retriever` returns no match, `response_composer` MUST NOT fabricate an answer (AC-003) — it returns a "no grounded answer" signal that forces `escalation_manager` to flag escalation.
-  - If `pii_guard` fails/errors, the pipeline halts for that inquiry rather than risk logging/forwarding unredacted PII (fail-closed on the privacy boundary) — the UI surfaces a generic "unable to process, please try again" message; this is a fail-closed design decision, not a silent failure.
-  - Overall crew execution timeout aligned to NFR-002 ("a few seconds"); a hard ceiling (e.g., `max_execution_time`) is set at the crew level so a stuck run degrades to a simulated escalation rather than hanging indefinitely — exact seconds value deferred to `@backend.eng` tuning, recorded here as an Open Question.
-- **Performance budgets**: `max_iter <= 12` per task per adapter-crewai.md baseline (most tasks here are single-shot, well under this ceiling); `max_rpm` set at crew level for budget stability (adapter-crewai.md).
+**Task / Turn Orchestration**
 
-**Task dependency diagram**:
+Flow (`InquiryFlow`), one instance per inquiry, regardless of channel:
 
-```mermaid
-flowchart TD
-    Start(["Inquiry received<br/>(chat or simulated email)"]) --> T1
+1. **`@start` — intake_normalize**: receive raw inquiry (chat message or simulated-email submission) → normalize to `{channel, raw_text, sender_id, timestamp}`.
+2. **`@listen` — pii_redact**: `pii_guard` agent redacts/masks PII in `raw_text` → produces `clean_text`. Runs before step 3, no exceptions (FR-011).
+3. **`@listen` — run_reasoning_crew**: `reasoning_crew.kickoff(clean_text, domain_config)` — sequential process, task-context chaining passes `intent` → `retrieved_snippets` → `sentiment_score` → `draft_response` through the four agents in order.
+4. **`@router` — escalation_gate**: reads `sentiment_score` and classifier confidence from step 3's output.
+   - **High-frustration or low-confidence** → `escalate` branch: flag the interaction for simulated human handoff; guest-visible message states this clearly (AC-003). The (simulated) human's resolution is recorded separately once submitted — see the decoupled `EscalationResolutionFlow` below — not blocked on here.
+   - **Else** → `respond` branch: deliver `draft_response`.
+5. **`@listen` — deliver_response**: send `draft_response` (or escalation notice) back via the originating channel — chat reply or simulated email reply (FR-005, FR-010, AC-006).
+6. **`@listen` — log_interaction**: always runs (both branches) — persists one interaction-log record: query, classification, sentiment, PII actions taken, outcome (FR-007).
 
-    T1["1. redact_pii_task<br/>(pii_guard)"] --> T2
-    T1 --> T4
+Decoupled second flow, `EscalationResolutionFlow` — triggered independently whenever a (simulated) human operator submits a resolution for an escalated interaction (this does not keep `InquiryFlow` waiting; escalation and its eventual human resolution are asynchronous by nature):
 
-    T2["2. classify_task<br/>(query_classifier)"] --> T3
-    T3["3. retrieve_knowledge_task<br/>(knowledge_retriever)"] --> T5
-    T4["4. analyze_sentiment_task<br/>(sentiment_analyzer)"] --> T5
-    T4 --> T6
+1. Receive `{original_inquiry_id, resolution_text}`.
+2. Write a candidate KB entry to the review queue, linked to the original query (FR-008, AC-010).
 
-    T5["5. compose_response_task<br/>(response_composer)"] --> T6
-    T3 --> T6
-    T6["6. escalation_decision_task<br/>(escalation_manager)"] --> T7
-    T7["7. log_interaction_task<br/>(interaction_logger)"] --> End(["Response returned<br/>+ interaction logged<br/>(+ review-queue enqueue if escalated)"])
+Third, fully separate write path — the **only** path that can modify the live KB (NFR-008):
 
-    classDef failClosed stroke:#c0392b,stroke-width:2px
-    class T1 failClosed
-```
+1. Reviewer views a queued candidate entry.
+2. Approve (optionally edited) → entry written to live KB, retrievable by `knowledge_retriever` from that point on (FR-014, AC-011).
+3. Reject → entry discarded, KB unchanged.
 
-*Note: `pii_guard` (task 1) is fail-closed — if it errors, the pipeline halts before any downstream task runs (see Error handling above), which is why every other task depends transitively on it.*
+**Error handling / retries / timeouts**: reasoning Crew tasks get a per-task timeout budget (`max_iter <= 12` per `adapter-crewai.md` baseline); on `pii_guard` failure, the Flow halts and logs a Diagnostic rather than passing unredacted text forward (fail-closed, not fail-open, given FR-011 is a Must). On `response_composer` producing no groundable answer, `escalation_gate` treats it as low-confidence and routes to escalate rather than returning a fabricated answer (AC-003).
 
-**Runtime-Conditional Configuration (crewai)**:
+**Runtime-Conditional Configuration (crewai)**
 
-- **Crew composition**: one crew, seven agents (six task agents + logger), instantiated once per process and reused across `kickoff()` calls (agents are stateless; no per-agent memory per NFR-005/reproducibility default).
-- **Process type**: `Process.sequential` (see ADR-002) — not hierarchical/manager-agent. Rationale: the task graph above is a fixed, PRD-specified linear/DAG-like pipeline (classify → retrieve → sentiment → compose → escalate → log) with no need for a manager agent to dynamically re-plan delegation; sequential mode is simpler, fully deterministic, and easier to audit/trace, consistent with adapter-crewai.md's "Prefer sequential process mode for reproducible MVP builds."
-- **YAML agent/task config**: all seven agents defined in `config/agents.yaml` and all seven tasks in `config/tasks.yaml` per adapter-crewai.md "Mapping" (externalized, not inline Python) — domain-specific *content* (taxonomy, KB, prompts) is a separate, further layer (the domain configuration JSON, FR-012), not mixed into `agents.yaml`/`tasks.yaml`. This two-layer separation (CrewAI structural config vs. domain content config) is itself an architectural decision — see ADR-001.
-- **`max_iter`**: `<= 12` per task, per adapter-crewai.md baseline; no task in this pipeline is expected to need iterative reasoning loops beyond single-digit iterations.
-- **Task context chaining**: explicit `context=[...]` lists per task as described above, not crew-level shared memory (`memory=False` default per adapter-crewai.md "Memory" section, for reproducibility) — session/interaction-scoped context lives in the crew inputs dict and task outputs, not in CrewAI's long-term memory subsystem.
-- **`allow_delegation`**: `false` for all agents (adapter-crewai.md default) — no agent delegates to another dynamically; the task graph is the delegation mechanism.
+- **Process type**: `Process.sequential` for the reasoning Crew (per `adapter-crewai.md`'s preference for reproducible MVP builds — no manager-agent/hierarchical process needed for a 4-step linear chain).
+- **Two separate configuration layers** (do not conflate):
+  1. **Framework-level** `config/agents.yaml` + `config/tasks.yaml` — static CrewAI role/goal/backstory/task definitions, per `adapter-crewai.md`'s YAML-externalization rule. Defines the 5 agents' identities.
+  2. **Domain-level** `domain_config.json`, schema-validated (stakeholder-confirmed format) — the swappable KB content, intent taxonomy, and prompt fragments (FR-012/FR-013). Loaded at runtime and templated into task descriptions/inputs; swapping this file (and only this file) is what NFR-007's domain-portability guarantee depends on.
+- `max_iter <= 12`, `max_retry_limit >= 2`, `allow_delegation=false` for all 5 agents (no manager-agent pattern justified for this MVP scope).
+- `kickoff_for_each` is not used — one `kickoff()` per inquiry, invoked from the Flow step.
 
 ### 3. Frontend Architecture Specification
 
-**Technology Stack**:
+**Technology Stack**: React + Vite, TypeScript, minimal CSS (no heavy component library — matches `ui.visual_style: minimal` in `aamad.config.yml`), no client-side state library beyond React state/context (scope doesn't need more).
 
-- **Framework**: React 18+ with Vite (justified default per §1 above — PRD is silent on a specific framework; ADR-006).
-- **UI library/styling**: minimal, framework-agnostic component styling (e.g., plain CSS modules or a lightweight utility CSS approach); no heavyweight design system mandated — matches `aamad.config.yml` `ui.visual_style: minimal`.
-- **Type safety**: TypeScript, per `aamad.config.yml` `coding_standards.type_checking: true`.
-- **State management**: local component state + a small shared client (e.g., React context or a lightweight store) for chat/session state; no global state library required at MVP scale.
+**Application Structure**
 
-**Application Structure**:
+- `/chat` — guest chat widget (primary interaction surface, NFR-001).
+- `/inbox` — simulated email inbox view (submit an "email" inquiry, view "sent" replies).
+- `/ops` — internal view: interaction log (NFR-003) + KB review queue (Reviewer approve/edit/reject, FR-014).
+- One API client module; no backend logic in this epic (per `development-workflow.md` module boundaries).
 
-- **Routes/pages**: `/chat` (guest chat widget), `/inbox` (simulated email inbox — inbound/outbound simulated messages through the same pipeline), `/ops` (internal interaction log + KB review queue, Reviewer actions).
-- **API client boundary**: a single typed API client module (e.g., `src/api/client.ts`) wrapping the backend endpoints defined in §4; the Frontend epic (`@frontend.eng`) builds UI against this contract without backend wiring (per `development-workflow.md` Module 2/3 split); actual wiring is the Integration epic's (`@integration.eng`) responsibility.
-- **Component architecture**: chat message list + composer (reused by both `/chat` and `/inbox` since both traverse the same backend pipeline), escalation banner component (visibly flags simulated human handoff per AC-003), ops log table, KB review-queue card (approve/edit/reject) restricted in the UI to the Reviewer persona view — no auth enforcement at MVP (see §8 Security).
-- **Accessibility**: basic usability (readable contrast, labeled inputs) per NFR-001; formal WCAG certification is Future Work (per PRD §6).
+**Interface Requirements**
 
-**Interface Requirements**:
-
-- **Primary interaction surface**: chat widget (guest-facing) and simulated inbox (guest-facing, same pipeline) — both must clearly display when a simulated escalation is triggered (AC-003), never silently drop or fabricate an answer.
-- **Loading/error states**: pending indicator while a `kickoff()` cycle runs (target: a few seconds per NFR-002); explicit error state for pipeline failures (e.g., PII-guard fail-closed case in §2) distinct from a normal escalation state.
-- **Placeholders for Future Work**: authentication/login (currently absent), real email provider selection, multi-domain switcher — represented as visibly disabled/labeled "Future Work" UI affordances only if trivial to stub; otherwise simply absent and documented here.
+- Chat/inbox: loading state while `InquiryFlow` runs; clear, distinct visual treatment for an escalation notice vs. a normal answer (AC-003).
+- Ops view: per-interaction detail (classification, sentiment score, PII redaction indicator) supporting explainability; review-queue items show original query + proposed KB entry side by side before Reviewer decides.
+- Future Work placeholders (visibly marked, non-functional for MVP): real-email settings, other-domain selector, voice input.
 
 ### 4. Backend Architecture Specification
 
-**API Architecture**:
+**API Architecture** (FastAPI)
 
-- **Primary endpoint**: `POST /api/inquiries` — accepts one inquiry (chat or simulated email) and drives one `crew.kickoff()`.
-  - **Request schema**: `{ "channel": "chat" | "email", "sender_ref": string (guest/session identifier, not real PII-authenticated identity), "message": string, "email_subject"?: string }`
-  - **Response schema**: `{ "interaction_id": string, "channel": "chat" | "email", "classification": { "intent": string, "confidence": number }, "sentiment": { "score": number, "label": string }, "response_text": string, "escalated": boolean, "escalation_reason"?: string, "kb_sources": string[] }`
-  - **Streaming/event envelope**: none for MVP (non-streaming, per ADR-003); a single synchronous JSON response per request, target latency aligned to NFR-002.
-- **Secondary endpoints**:
-  - `GET /api/interactions` — ops log listing (NFR-003/AC-004) — supports the `/ops` view.
-  - `GET /api/review-queue` / `POST /api/review-queue/{id}/approve` / `POST /api/review-queue/{id}/reject` — Reviewer actions (FR-014, AC-011).
-  - `GET /api/inbox` — simulated email inbox listing/state (FR-009/FR-010 support).
-- **Validation**: request schema validation at the API boundary (e.g., Pydantic models) before any content enters the crew pipeline; reject malformed requests with a structured error envelope before PII redaction is even attempted.
-- **Rate limiting**: not required for MVP (no real external traffic, single-developer demo); noted as Future Work given no enterprise-scale target (PRD §3 Infrastructure Specifications).
-- **Error envelope shape**: `{ "error": { "code": string, "message": string } }` for all non-2xx responses, including the PII-guard fail-closed case from §2.
-- **Alignment with runtime adapter**: the API layer's sole runtime responsibility is constructing the crew's `inputs` dict from the validated request and invoking `crew.kickoff(inputs=...)`, then mapping the crew's final task output (`LogEntry`/`ComposedResponse`/`EscalationDecision`) to the response schema above — no business logic duplicated outside the crew.
+- `POST /chat` — `{message, session_id}` → `{reply, escalated: bool}`. Triggers `InquiryFlow` with `channel=chat`.
+- `POST /email` — `{from, subject, body}` → `{reply_body, escalated: bool}`. Triggers `InquiryFlow` with `channel=email`.
+- `POST /escalations/{id}/resolve` — `{resolution_text}` → triggers `EscalationResolutionFlow`.
+- `GET /review-queue` / `POST /review-queue/{id}/approve` / `POST /review-queue/{id}/reject` — the sole KB-write path (NFR-008).
+- `GET /interactions` — interaction log for the ops view.
+- Validation: request schemas enforced (FastAPI/Pydantic); error envelope `{error_code, message}`; no rate limiting for MVP (no real external traffic).
 
-**Data Architecture**:
+**Data Architecture** (justified minimal store — PRD requires persistence, so this isn't deferred)
 
-- MVP persistence is required (not "none"), per PRD §3 Integration Requirements: "lightweight local storage (file-based or embedded DB) for KB content, interaction logs, and the review queue." This SAD selects **SQLite** (file-based, zero-ops, sufficient for single-developer/demo scale, trivially portable) as the justified minimal store — see ADR-008. A real database/vector store (e.g., Postgres + pgvector) is explicitly deferred (Out of Scope).
-- **Logical data entities**: `domain_config` (JSON, loaded from file per FR-012/FR-013, not a DB table — see §6/Data View), `interaction_log` (NFR-003/AC-004), `review_queue_entry` (FR-008/AC-010), `kb_entry` (active knowledge base content, FR-013; mutated only via the Reviewer approval path per NFR-008/AC-011).
+- Local file-based or embedded DB (e.g., SQLite) for: KB content (seeded from `domain_config.json`, then mutable only via approved review-queue writes), interaction log, review queue. No vector DB / external database for MVP (Out of Scope — Future Work).
 
-**Runtime Integration Layer**:
+**Runtime Integration Layer**
 
-- **HTTP → runtime invocation**: a thin FastAPI (or equivalent Python web framework, consistent with `aamad.config.yml` `language.primary: python`) service layer translates HTTP requests into crew `kickoff()` calls and crew outputs back into HTTP responses; no direct frontend-to-CrewAI coupling.
-- **Agent configuration management**: `config/agents.yaml` and `config/tasks.yaml` loaded once at process start (adapter-crewai.md "Setup"); the active domain configuration JSON is loaded separately and injected into task tool contexts (e.g., as a resolved file path or in-memory dict passed via crew `inputs`), keeping the domain-config load path independent of the CrewAI structural config load path (reinforces ADR-001's separation).
-- **Logging/Prompt Trace hooks**: per adapter-crewai.md Logging — rendered system/user prompts captured as Prompt Trace before each `kickoff()`; lifecycle events (task start/stop, retries, guardrail outcomes) captured in a Trace Log; both persisted under `project-context/2.build/logs` (Build-phase concern, recorded here as the architectural hook point) — kept separate from the guest-facing `interaction_log` DB table, and secrets/PII must be redacted from both per adapter-crewai.md.
+- FastAPI route handlers invoke `InquiryFlow.kickoff()` / `EscalationResolutionFlow.kickoff()` synchronously (non-streaming, per §1).
+- Agent configuration (`config/agents.yaml`, `config/tasks.yaml`) loaded once at process start; `domain_config.json` loaded once at start and hot-swappable only by restart for MVP (no live domain-switching UI).
+- Prompt Trace and per-task logs written per `adapter-crewai.md` Logging rules, redacting secrets, under `project-context/2.build/logs`.
 
-**Authentication & Secrets**:
+**Authentication & Secrets**
 
-- No user authentication for MVP (Out of Scope, PRD §5/system-description §8) — this applies to guest-facing chat/email endpoints. The `/ops` review-queue endpoints are **not** access-controlled at MVP either, which is a recorded security gap (see §8 and Open Questions), not a silent omission.
-- Required secrets are referenced by environment variable name only, defined in `.env.example` (created in Build phase) — e.g., `ANTHROPIC_API_KEY` or equivalent LLM provider key consumed by CrewAI's underlying LLM client, plus any embedding/model provider keys if a hosted LLM is used for classification/composition. Exact provider/model selection is deferred to `@backend.eng` (Open Question below) since PRD does not pin a specific LLM vendor.
+- No user authentication for MVP (Out of Scope). LLM provider is **Anthropic** (stakeholder-confirmed); specific model TBD. API key via env var only (`.env.example` entry: `ANTHROPIC_API_KEY`) — never committed, never in Prompt Trace.
 
 ### 5. DevOps & Deployment Architecture
 
-**CI/CD** (minimal MVP): lint, unit test, integration test, build stages — per `aamad.config.yml` `testing.require_unit_tests`/`require_integration_tests`; exact pipeline config is `@devops.eng`'s Deliver-phase artifact (`deploy.md`), not defined further here.
-
-**Hosting**: PRD §3 Infrastructure Specifications states hosting is "local/dev execution for MVP; no cloud target selected — deferred to `@devops-eng`." This SAD assumes a **single-process local/dev deployment**: one backend process (FastAPI + embedded CrewAI crew + SQLite file) and one frontend static build, runnable via `docker compose` or direct local run for the demo — the smallest MVP-appropriate target per template guidance. A concrete health-check endpoint (`GET /api/health`) is specified as part of the API surface for basic liveness checking.
-
-**IaC / multi-region / advanced monitoring**: Future Work — no IaC, no multi-region, no APM beyond the baseline logs in §4/§6, consistent with "no enterprise-scale throughput target for MVP" (PRD §3).
-
-**Observability**: baseline logs (interaction log, PII-handling log, CrewAI Trace Log) and the `/api/health` check constitute MVP observability; advanced APM/tracing is deferred.
+- **CI/CD (minimal MVP)**: lint (ruff/flake8), test (pytest), build — no deploy automation beyond config scaffolding, per `delivery-workflow.md`.
+- **Hosting**: single-service local/dev target for MVP demo; `/health` endpoint required. Specific cloud target is an Open Question for `@devops-eng`.
+- **IaC / multi-region / advanced monitoring**: Future Work — not scoped.
+- **Observability**: baseline structured logs (interaction log, PII-action log) + `/health`; no APM for MVP.
 
 ### 6. Data Flow & Integration Architecture
 
-**Request/response path** (chat or simulated email, same pipeline per FR-009/FR-010):
-
-1. Guest submits a message via the `/chat` or `/inbox` frontend surface.
-2. Frontend API client calls `POST /api/inquiries`.
-3. Backend validates the request, constructs crew `inputs`, and calls `crew.kickoff()`.
-4. Crew executes the sequential task pipeline (§2): PII redaction → classification → KB retrieval → sentiment analysis → response composition → escalation decision → interaction logging (+ review-queue enqueue if escalated).
-5. Backend maps the crew's final outputs to the `/api/inquiries` response schema and returns it.
-6. Frontend renders the response (and, if `escalated: true`, the escalation banner per AC-003).
-7. Separately, the ops `/ops` view polls `GET /api/interactions` and `GET /api/review-queue` to display logs and pending KB candidates; Reviewer actions call the approve/reject endpoints, which are the **only** write path to the `kb_entry` table (NFR-008).
-
-**Diagram — request/response path and Reviewer flow**:
-
-```mermaid
-sequenceDiagram
-    actor Guest
-    participant FE as Frontend (/chat, /inbox)
-    participant API as Backend API (FastAPI)
-    participant Crew as CrewAI Crew (7-task pipeline)
-    participant DB as SQLite
-
-    Guest->>FE: submit inquiry
-    FE->>API: POST /api/inquiries
-    API->>Crew: crew.kickoff(inputs)
-    Note over Crew: redact → classify → retrieve →<br/>sentiment → compose → escalate → log
-    Crew->>DB: write interaction_log<br/>(+ review_queue_entry if escalated)
-    Crew-->>API: final task outputs
-    API-->>FE: response JSON (classification, sentiment,<br/>response_text, escalated)
-    FE-->>Guest: render response / escalation banner
-
-    actor HotelOps as Hotel Ops
-    actor Reviewer
-    participant OpsUI as /ops view
-
-    HotelOps->>OpsUI: view interaction log
-    OpsUI->>API: GET /api/interactions
-    API->>DB: read interaction_log
-    DB-->>API: log rows
-    API-->>OpsUI: log listing
-    OpsUI-->>HotelOps: render log table
-
-    Reviewer->>OpsUI: open review queue
-    OpsUI->>API: GET /api/review-queue
-    API->>DB: read review_queue_entry (pending)
-    DB-->>API: pending entries
-    API-->>OpsUI: queue listing
-    Reviewer->>OpsUI: approve / edit / reject
-    OpsUI->>API: POST /api/review-queue/{id}/approve|reject
-    API->>DB: write kb_entry
-    Note over API,DB: only path that writes kb_entry (ADR-005, NFR-008)
-```
-
-**External tool/API integrations required for MVP**: none beyond the LLM provider used by CrewAI agents for classification/sentiment/composition reasoning (exact provider TBD — see Open Questions). No real helpdesk/CRM, no real SMTP/IMAP, no real KB/vector store — all mocked/local per PRD §3.
-
-**Domain configuration data flow**: the active domain configuration (JSON, schema-validated) is loaded at backend startup from a config path (e.g., `domain-configs/hotel.json`), validated against a JSON Schema, and made available to `query_classifier` (taxonomy) and `knowledge_retriever` (KB content/path) and to prompt templates used by `response_composer` (FR-012/FR-013). This load path is entirely separate from `config/agents.yaml`/`config/tasks.yaml` — reinforces ADR-001.
-
-**Error propagation and user-visible feedback**:
-- Validation errors → structured 4xx error envelope → frontend shows an inline form error.
-- PII-guard fail-closed error → structured 5xx (or dedicated 4xx) error envelope → frontend shows a generic "unable to process" message (never surfaces raw unredacted content or stack traces).
-- No-KB-match → not an error; flows through as a normal `escalated: true` response with `escalation_reason` set → frontend renders the escalation banner (AC-003), never a fabricated answer.
+Guest (chat or simulated email) → FastAPI route → `InquiryFlow` (`pii_guard` → reasoning Crew → escalation router → response/escalation) → reply delivered on originating channel, interaction logged. Escalations separately resolved via `EscalationResolutionFlow` → review queue → Reviewer approval → live KB (the only integration point that mutates persistent domain knowledge). No external API/tool integrations for MVP — everything is local/simulated per Constraints in `system-description.md` §5. Errors at any Flow step surface as a chat/email-visible "something went wrong, escalating to a human" message rather than a silent failure or a fabricated answer (AC-003 extends to the error path).
 
 ### 7. Performance & Scalability Specifications
 
-- **Response-time target**: single-query end-to-end resolution within a few seconds (NFR-002) — no numeric SLA beyond "a few seconds" is specified by PRD; this SAD does not invent a precise millisecond figure (see Assumptions) but recommends `@backend.eng` instrument the crew-level `max_execution_time` and per-task timing in the Trace Log to validate this qualitatively during QA.
-- **Concurrency targets**: none specified for MVP — no enterprise-scale throughput target (PRD §3); single-developer/demo-scale concurrent usage (a handful of simultaneous demo users at most) is assumed sufficient. Formal load targets are Future Work.
-- **Scaling path deferred with rationale**: horizontal scaling, queueing, and multi-instance crew execution are deferred — SQLite and a single backend process are adequate at demo scale and avoid premature infrastructure complexity, consistent with "Minimal viable architecture first" (aamad-core.md).
-- **Token/cost controls at runtime layer**: `max_iter` and `max_rpm` caps per adapter-crewai.md Execution baselines (§2 above); exact numeric budgets and LLM model/temperature selection are deferred to `@backend.eng` Build-phase configuration and must be recorded in `backend.md` Audit per adapter-crewai.md "Setup" ("Record resolved `llm`, temperature, and max token controls in Audit").
+- Response-time target: a few seconds per inquiry end-to-end (NFR-002) — achievable non-streaming given only 4 sequential LLM calls (classify, retrieve-grounding, sentiment, compose) plus 1 PII-redaction call per inquiry.
+- Concurrency: not a design driver for MVP (no real traffic) — single-process FastAPI is sufficient.
+- Scaling path: deferred entirely (Out of Scope — enterprise-scale load is explicit Future Work in the PRD).
+- Token/cost controls: `max_iter <= 12` per agent task; no retries beyond `max_retry_limit >= 2` to bound cost per inquiry.
 
 ### 8. Security & Compliance Architecture
 
-- **AuthN/AuthZ for MVP**: none — explicitly Out of Scope per PRD §5/system-description §8. This includes the `/ops` review-queue surface, which in principle should be restricted to the Reviewer persona but has no enforced access control at MVP. **This is a recorded architectural risk, not an oversight** — see Risks (§ below) and Open Questions.
-- **Encryption**: PII in stored logs must be encrypted at rest (NFR-004); this SAD specifies encryption at the storage layer (e.g., SQLite database file encrypted via OS/filesystem-level encryption, or field-level encryption for PII-bearing columns) — exact mechanism deferred to `@backend.eng`/`@security.eng`, recorded as Open Question given no specific regulation was named.
-- **Input validation baselines**: API-boundary schema validation (§4) before any content reaches PII redaction or the crew pipeline; PII redaction itself (`pii_guard` agent) is the core privacy control applied before logging, retrieval, or LLM composition (FR-011, AC-007).
-- **Auditability**: PII-handling/redaction actions are themselves logged (NFR-006) in a distinct, inspectable log stream, not mixed silently into the general interaction log, so redaction behavior can be independently reviewed.
-- **Compliance deferred with explicit Open Questions**: no named regulation (GDPR/CCPA/HIPAA) is targeted for MVP (system-description §2/Open Questions); general data-protection best practice only. `@security.eng`'s Deliver-phase security assessment (required per `aamad.config.yml` `security.require_security_assessment: true`) should re-validate this architecture's PII/encryption/access-control posture before any real deployment.
+- **AuthN/AuthZ**: none for MVP (Out of Scope, documented).
+- **PII handling**: `pii_guard` redacts/masks before any other component sees raw text (FR-011); redaction actions are themselves logged (NFR-006); best-practice encryption at rest for stored PII-adjacent data (NFR-004) — no named regulation certified (GDPR/CCPA/HIPAA remains an Open Question).
+- **KB integrity**: enforced structurally — only the Reviewer-approval write path can mutate the live KB (NFR-008); no agent holds KB write access.
+- **Input validation**: FastAPI/Pydantic schema validation on all endpoints; PII-guard treated as a security-critical fail-closed step (§2 error handling).
+- **Compliance**: general best-practice only for MVP; formal certification explicitly deferred — flagged again here per `aamad-core.md`'s Security and Compliance rule, and a Security Assessment (`@security.eng`) is required before Deliver per `aamad.config.yml` (`security.require_security_assessment: true`).
 
 ### 9. Testing & Quality Assurance Specifications
 
-- **Unit tests**: per agent/task logic (classification mapping, sentiment scoring thresholds, PII redaction patterns, escalation decision logic) — required per `aamad.config.yml` `testing.require_unit_tests: true`.
-- **Integration tests**: full `crew.kickoff()` pipeline runs against representative inquiries for each of the four in-scope Hotel/Hospitality scenario categories, verifying AC-001 through AC-011 mappings — required per `testing.require_integration_tests: true` and `map_to_acceptance_criteria: true`.
-- **Smoke/acceptance expectations for MVP**: end-to-end chat flow, end-to-end simulated email flow (AC-006), escalation trigger flow (AC-003), PII redaction flow (AC-007), domain-config-driven classification flow (AC-008), KB review-queue approve/reject flow (AC-010/AC-011).
-- **Runtime-specific checks**: validate CrewAI task output schemas (structured Pydantic outputs per §2) before they enter the shared context; validate Trace Log/Prompt Trace capture is present per adapter-crewai.md Quality Gates; architectural review (not automated test) for AC-005 (new agent/tool integrates without rewriting existing agents) and AC-009 (no domain-specific hardcoding outside the domain config layer) — both explicitly assigned to `@system.arch` in the PRD.
-- **Security assessment recommended before Deliver**: per `delivery-workflow.md` Phase Gate and `aamad.config.yml` `security.require_security_assessment: true`, `@security.eng` must produce `project-context/2.build/security.md` before `@devops.eng` proceeds to Deliver — materially relevant here given the FR-011/NFR-004/NFR-006 PII-handling surface and the unauthenticated `/ops` endpoint noted in §8.
+- **Unit**: PII-guard redaction correctness; escalation-router threshold logic (ADR-002 makes this a pure function — directly unit-testable, a deliberate benefit of that decision); domain-config JSON schema validation.
+- **Integration**: full `InquiryFlow` run per hotel scenario category (reservations & booking, check-in/check-out & billing, room service & amenities, general complaints) mapped to AC-001–AC-011.
+- **Smoke/acceptance**: AC-001 through AC-011 from `system-description.md`/`prd.md` form the acceptance suite; `@qa-eng` maps test cases 1:1 to these IDs.
+- **Runtime-specific checks**: reasoning-Crew task outputs schema-checked at each context-chain step (malformed output fails closed to escalation, not a guess).
+- Security assessment recommended before Deliver (see §8).
 
 ### 10. MVP Launch & Feedback Strategy
 
-- **Beta/pilot criteria**: not applicable in a market sense — this is an internal/portfolio demonstration, not a staged rollout (PRD §9). "Launch" readiness = passing AC-001 through AC-011 across the four in-scope hotel scenarios plus qualitative usability check (NFR-001).
-- **Success metrics tied to PRD KPIs**: qualitative demo criteria per PRD §7 — correct classification, grounded response, and appropriate escalation behavior across all four scenario categories; response latency in line with NFR-002; pass rate against AC-001–AC-011; non-technical usability check against NFR-001. No live-traffic/CSAT metrics (no real user base).
-- **Iteration priorities after first deploy**: (1) resolve the "full self-improvement vision" open question with the stakeholder (PRD §8 discussion, beyond the MVP-scoped human-curated loop); (2) decide real hosting/infra target with `@devops.eng`; (3) evaluate whether `/ops` needs authentication before any wider demo audience; (4) consider a second domain configuration (e.g., IT helpdesk) to prove out NFR-007 portability, deferred by stakeholder decision for MVP.
-
-## Architectural Decisions
-
-| ID | Decision | Rationale | Alternatives Considered | Trace |
-|---|---|---|---|---|
-| ADR-001 | Two-layer configuration: CrewAI structural config (`config/agents.yaml`, `config/tasks.yaml`) is separate from the domain content configuration (schema-validated JSON: taxonomy, KB, prompts) | Keeps "how the crew is structured" (CrewAI/adapter concern) cleanly separated from "what vertical it serves" (domain concern), directly enforcing FR-012/NFR-007/AC-009 | Single merged config file (rejected — blurs core-code/domain boundary, harder to audit "no hardcoded domain strings") | FR-012, FR-013, NFR-007, AC-008, AC-009 |
-| ADR-002 | Sequential CrewAI process (`Process.sequential`), not hierarchical/manager-agent | Task pipeline is a fixed, PRD-specified linear flow; sequential mode is deterministic, simpler to trace/debug, and matches adapter-crewai.md's stated preference for reproducible MVP builds | Hierarchical process with a manager agent (rejected for MVP — adds nondeterminism and complexity not justified by a fixed pipeline; adapter-crewai.md requires explicit SAD justification to deviate, which this pipeline does not warrant) | PRD §3 "Exact task/delegation wiring... is an implementation decision for @system-arch", adapter-crewai.md Execution |
-| ADR-003 | Non-streaming request/response API contract | NFR-002 only requires "a few seconds" end-to-end latency, not token-level streaming UX; keeps backend contract and frontend loading-state logic simple for a 5-week timeline | Server-sent events/streaming response (deferred — Future Work UX enhancement, not required by any Must FR/AC) | NFR-002 |
-| ADR-004 | Dedicated `pii_guard` CrewAI agent (not a shared pre/post-processing utility function) | PRD leaves this open as an implementation detail but explicitly notes it's stakeholder-relevant; making it a first-class agent keeps PII handling visible/auditable in the Trace Log and task graph like every other pipeline step, and lets it be independently tested/retried like other agents | Shared utility function called by multiple agents (valid alternative per PRD Assumptions — rejected here for auditability/consistency with the rest of the agent-based pipeline, and because interaction_logger and future agents can now depend on it via the same Task.context mechanism) | FR-011, PRD Assumptions ("either satisfies FR-011... left open") |
-| ADR-005 | KB approval is not modeled as an agent decision; only a human Reviewer action (outside the crew) can write to the live KB | Directly required by FR-014/NFR-008 — "no agent has write access to the live KB" | Autonomous KB-update agent with confidence threshold (explicitly rejected by PRD — "not an agent decision") | FR-008, FR-014, NFR-008, AC-010, AC-011 |
-| ADR-006 | React + Vite + TypeScript frontend (justified default, PRD silent on framework) | Minimal build tooling, fast iteration fits 5-week single-developer timeline, no SSR/SEO need for an internal demo; TypeScript satisfies `aamad.config.yml` `coding_standards.type_checking: true` | Next.js App Router (rejected — SSR/routing complexity not needed for a single-page internal demo); no-framework/vanilla JS (rejected — weaker type safety, slower iteration) | PRD §6 (silent on framework), `aamad.config.yml` |
-| ADR-007 | Retain all six PRD-specified pipeline agents + logger (seven total), exceeding the SAD template's "3–4 agents maximum" MVP guidance | Each agent maps 1:1 to a distinct Must-priority FR and a distinct reasoning responsibility; collapsing agents would blur the domain-agnostic boundary (FR-012) or the PII-safety boundary (FR-011), both of which are load-bearing MVP requirements, not nice-to-haves | Merge classification+retrieval, or sentiment+composition, into fewer agents (rejected — increases per-agent responsibility scope, works against NFR-005 extensibility and FR-012 domain-agnosticism) | PRD §3 Core Agent Definitions, NFR-005 |
-| ADR-008 | SQLite as the MVP data store for interaction logs, review queue, and active KB | File-based, zero-ops, matches PRD §3's explicit "lightweight local storage (file-based or embedded DB)" requirement and single-developer/demo scale; trivially portable for `@devops.eng` packaging | Embedded document store (e.g., TinyDB/JSON files) (viable alternative, less relational integrity for review-queue→KB promotion); real DB/vector store (explicitly Out of Scope per PRD) | PRD §3 Integration Requirements, system-description §8 |
-
-## Views
-
-### Logical View
-**Primary presentation**: Layered structure — (1) Frontend SPA (chat, inbox, ops views) → (2) Backend API layer (FastAPI, request validation, crew invocation, response mapping) → (3) CrewAI Crew (seven agents, sequential task pipeline) → (4) Domain Configuration layer (JSON, schema-validated, swappable) consumed by classification/retrieval/composition tasks → (5) Persistence layer (SQLite: interaction_log, review_queue_entry, kb_entry).
-**Element catalog**: Frontend SPA; API layer; Crew (agents listed in §2); Domain Config loader/validator; SQLite store; Trace Log/Prompt Trace sink (adapter-crewai.md Logging).
-**Rationale/analysis**: The Domain Configuration layer is drawn as a distinct element (not folded into the Crew) specifically to make FR-012's boundary architecturally visible and reviewable (AC-009). The Persistence layer is deliberately thin (one file-based store) to match MVP scale (ADR-008).
-
-**Diagram**:
-
-```mermaid
-flowchart TD
-    subgraph FE["(1) Frontend SPA"]
-        Chat["/chat"]
-        Inbox["/inbox"]
-        Ops["/ops"]
-    end
-
-    subgraph BEAPI["(2) Backend API layer (FastAPI)"]
-        API["Request validation<br/>crew invocation<br/>response mapping"]
-    end
-
-    subgraph CrewLayer["(3) CrewAI Crew — sequential pipeline"]
-        Agents["7 agents<br/>(pii_guard, query_classifier, knowledge_retriever,<br/>sentiment_analyzer, response_composer,<br/>escalation_manager, interaction_logger)"]
-    end
-
-    subgraph DC["(4) Domain Configuration (JSON, swappable)"]
-        Config["taxonomy / kb_entries / prompts"]
-    end
-
-    subgraph Persist["(5) Persistence layer (SQLite)"]
-        ILog[(interaction_log)]
-        RQ[(review_queue_entry)]
-        KBT[(kb_entry)]
-    end
-
-    Chat --> API
-    Inbox --> API
-    Ops --> API
-    API --> Agents
-    Agents -. reads .-> Config
-    Agents --> ILog
-    Agents --> RQ
-    Ops -- "Reviewer approve/reject<br/>(only KB write path)" --> KBT
-    Agents -. reads .-> KBT
-```
-
-### Process / Runtime View
-**Primary presentation**: See §6 Data Flow — one request thread per inquiry: HTTP request → validation → `crew.kickoff()` (synchronous, sequential task execution per §2's seven-step pipeline) → response mapping → HTTP response. Ops-view reads (`GET /api/interactions`, `GET /api/review-queue`) and Reviewer writes (`POST .../approve|reject`) are independent, asynchronous-to-the-crew request threads that only touch the persistence layer, never the crew directly.
-**Element catalog**: HTTP request thread (per inquiry); crew task execution sequence (7 tasks, §2); ops-view read/write threads.
-**Rationale/analysis**: Keeping Reviewer actions structurally outside the crew's runtime path is what makes ADR-005/NFR-008 enforceable — there is no runtime code path from "crew execution" to "KB write."
-
-### Deployment View
-**Primary presentation**: Single-process local/dev deployment — one backend process (FastAPI app embedding the CrewAI crew, domain config loader, and SQLite file) and one static frontend build, both runnable via `docker compose` (2 services: `backend`, `frontend`) or directly on a developer machine for the demo. `GET /api/health` exposed for liveness. No load balancer, no multi-instance, no managed cloud DB.
-**Element catalog**: `backend` container/process (Python, FastAPI, CrewAI, SQLite file mounted/persisted); `frontend` container/process (static React build served via a lightweight web server or dev server); `.env` file supplying secret env vars (never committed) per `.env.example`.
-**Rationale/analysis**: Matches PRD §3's "local/dev execution for MVP; no cloud target selected" and the template's "smallest MVP-appropriate target" guidance; concrete cloud hosting target remains `@devops.eng`'s Deliver-phase decision (Open Question below).
-
-**Diagram**:
-
-```mermaid
-flowchart LR
-    Browser["Browser<br/>(Guest / Hotel Ops / Reviewer)"]
-
-    subgraph Host["docker compose (or direct local run)"]
-        subgraph BESvc["backend service"]
-            FastAPIProc["FastAPI app"]
-            CrewProc["CrewAI crew (embedded)"]
-            SQLiteFile[("SQLite file")]
-            Health["GET /api/health"]
-        end
-        subgraph FESvc["frontend service"]
-            StaticFE["Static React build"]
-        end
-        EnvFile[".env<br/>(secrets, never committed)"]
-    end
-
-    Browser -->|HTTP| StaticFE
-    Browser -->|"HTTP /api/*"| FastAPIProc
-    FastAPIProc --> CrewProc
-    FastAPIProc --> SQLiteFile
-    FastAPIProc --> Health
-    EnvFile -. supplies secrets .-> FastAPIProc
-```
-
-### Data View
-**Primary presentation**:
-- `domain_config` (file-based JSON, not a DB table): `{ "domain_id": string, "taxonomy": [...], "kb_entries": [...], "prompts": {...} }`, schema-validated at load time (FR-012, FR-013).
-- `interaction_log` (SQLite table): `interaction_id, timestamp, channel, redacted_query, intent, confidence, sentiment_score, response_text, escalated, escalation_reason, pii_redaction_summary`.
-- `review_queue_entry` (SQLite table): `entry_id, interaction_id (FK), original_query, simulated_resolution, status (pending|approved|rejected), reviewed_by, reviewed_at, edited_content`.
-- `kb_entry` (SQLite table, part of the active KB used by `knowledge_retriever`): `kb_entry_id, domain_id, intent, content, source (seed|reviewer_approved), created_at`.
-**Element catalog**: domain_config (file), interaction_log, review_queue_entry, kb_entry (all SQLite).
-**Rationale/analysis**: `review_queue_entry.status` and the absence of any other write path to `kb_entry` from agent code together implement NFR-008/AC-011's integrity guarantee at the data-model level, not just as a policy statement.
-
-**Diagram**:
-
-```mermaid
-erDiagram
-    INTERACTION_LOG {
-        string interaction_id PK
-        datetime timestamp
-        string channel
-        string redacted_query
-        string intent
-        float confidence
-        float sentiment_score
-        string response_text
-        boolean escalated
-        string escalation_reason
-        string pii_redaction_summary
-    }
-    REVIEW_QUEUE_ENTRY {
-        string entry_id PK
-        string interaction_id FK
-        string original_query
-        string simulated_resolution
-        string status "pending | approved | rejected"
-        string reviewed_by
-        datetime reviewed_at
-        string edited_content
-    }
-    KB_ENTRY {
-        string kb_entry_id PK
-        string domain_id
-        string intent
-        string content
-        string source "seed | reviewer_approved"
-        datetime created_at
-    }
-
-    INTERACTION_LOG ||--o{ REVIEW_QUEUE_ENTRY : "escalation enqueues"
-    REVIEW_QUEUE_ENTRY ||--o| KB_ENTRY : "Reviewer approval creates (ADR-005, only write path)"
-```
-
-*`domain_config` (taxonomy/kb_entries/prompts) is a schema-validated JSON file, not a SQLite table, and seeds `kb_entry.content` at load time — see Data Architecture (§4) and Domain configuration data flow (§6).*
-
-## Correspondence Rules Across Views
-- Every agent named in the Logical View's Crew element maps to exactly one task in the Process/Runtime View's execution sequence (1:1 agent-to-primary-task correspondence per §2 table).
-- The Domain Configuration element in the Logical View corresponds to the `domain_config` file artifact in the Data View — the same swappable unit referenced by FR-012/FR-013.
-- The Deployment View's single `backend` process hosts every element in the Logical View except the Frontend SPA — there is no separate "runtime service" deployment unit at MVP scale (ADR-008/minimal deployment).
-- The Reviewer's write path in the Process/Runtime View (`POST /api/review-queue/{id}/approve|reject`) is the only path terminating at `kb_entry` writes in the Data View — no agent-originated path exists, per ADR-005.
-
-## Risks
-| Risk | Impact | Likelihood | Mitigation | Trace |
-|---|---|---|---|---|
-| Domain-agnostic architecture adds complexity vs. a hotel-only hardcoded build | Medium — could slow 5-week timeline | Medium | Enforce config/core-code boundary early via AC-009 architectural review; minimal domain-config schema (ADR-001) | PRD §8 Risk Mitigation |
-| PII handling is "best practice" only, no named regulation | Medium — not production/compliance-ready | Certain (by design for MVP) | Document explicitly as non-certified; flag before any real deployment; `@security.eng` assessment before Deliver | system-description §2/Open Questions, PRD §8 |
-| Unauthenticated `/ops` review-queue endpoint | Medium — any client could approve/reject KB candidates in a real deployment | High if exposed beyond local demo | **Accepted for MVP demo (stakeholder-confirmed, 2026-08-05)**: constrain to local/dev deployment only; require auth before any wider audience | Not covered by any PRD FR/NFR — architectural gap identified by this SAD; resolution recorded in Open Questions |
-| No MRD/market validation input to this architecture | Low for MVP (internal demo) — but architecture decisions (e.g., agent count, domain scope) rest solely on PRD/usecase.txt framing, not validated market need | N/A (accepted scope) | Recorded as Assumption/Open Question; not a blocker for MVP demo purposes | See Assumptions below |
-| Seven-agent crew exceeds template's 3-4 agent MVP guidance, increasing orchestration surface area | Medium — more moving parts to test/debug within 5-week timeline | Medium | ADR-007 rationale; AC-005 structural review before adding further agents | PRD §3, NFR-005 |
-| No numeric latency/throughput SLA defined beyond "a few seconds" | Low — qualitative acceptance is sufficient for MVP demo | Low | QA instruments and reports actual latency during acceptance testing (§9); revisit if productionized | NFR-002 |
-
-## Traceability Matrix (PRD → Architecture)
-
-| PRD/System-Description ID | Architectural Element |
-|---|---|
-| FR-001, FR-002 | `query_classifier` agent, `classify_task`, Logical View |
-| FR-003, FR-013 | `knowledge_retriever` agent, `retrieve_knowledge_task`, domain_config data element |
-| FR-004 | `sentiment_analyzer` agent, `analyze_sentiment_task` |
-| FR-005 | `response_composer` agent, `compose_response_task` |
-| FR-006 | `escalation_manager` agent, `escalation_decision_task` |
-| FR-007 | `interaction_logger` agent, `interaction_log` table |
-| FR-008, FR-014 | `interaction_logger` (enqueue), `review_queue_entry` table, Reviewer-only approve/reject endpoints (ADR-005) |
-| FR-009, FR-010 | Shared pipeline invoked from both `/chat` and `/inbox` frontend surfaces via the same `POST /api/inquiries` endpoint |
-| FR-011 | `pii_guard` agent, `redact_pii_task` (ADR-004), fail-closed error handling (§2/§6) |
-| FR-012, NFR-007 | Two-layer configuration (ADR-001), domain_config data element |
-| NFR-001 | Frontend Interface Requirements (§3) |
-| NFR-002 | §7 Performance & Scalability, ADR-003 |
-| NFR-003 | interaction_log table, Trace Log hooks (§4) |
-| NFR-004, NFR-006 | §8 Security & Compliance, pii_redaction_summary field |
-| NFR-005 | Seven-agent modular design (ADR-007), Correspondence Rules |
-| NFR-008 | ADR-005, review_queue_entry.status data model, Correspondence Rules |
-| AC-001–AC-011 | §9 Testing & QA Specifications (explicit mapping per test type) |
+- No external beta/pilot — internal/portfolio project (PRD §9). "Launch" = a working local demo covering all four in-scope hotel scenarios plus the escalation and KB-review-approval flows end-to-end.
+- Success metrics tied to PRD §7: AC-001–011 pass rate, qualitative classification/escalation correctness across the four scenario categories, NFR-002 latency observed in practice.
+- Iteration priorities after first working demo: (1) close any AC gaps found by `@qa-eng`, (2) revisit the self-improvement roadmap items from the stakeholder brainstorm (LLM-assisted KB drafting, gap detection — currently Future Work, not yet committed).
 
 ## Implementation Guidance for AI Development Agents
 
-1. Foundation setup per `setup.md` epic (`@project.mgr`) — Python environment, CrewAI, FastAPI, SQLite, React/Vite scaffold.
-2. Frontend MVP UI without backend wiring (`@frontend.eng`) — chat, inbox, ops views against the typed API client contract in §4.
-3. Backend runtime scaffolding per adapter rule (`@backend.eng`) — `config/agents.yaml`, `config/tasks.yaml`, domain config loader/validator, crew pipeline (§2), API layer (§4), SQLite schema (Data View).
-4. Integration epic wires FE ↔ BE (`@integration.eng`).
-5. QA validates unit, integration, and smoke paths against AC-001–AC-011 (`@qa.eng`).
-6. Security assessment (`@security.eng`) before Deliver, given PII-handling and unauthenticated `/ops` surface noted in §8/Risks.
-7. Deliver packages deploy/CI/runbook only (`@devops.eng`) — resolves hosting target Open Question.
+1. `@project-mgr` — environment/dependency setup per `setup.md` (Python + FastAPI + CrewAI backend, React/Vite frontend, `config/agents.yaml`, `config/tasks.yaml`, `domain_config.json` scaffolds).
+2. `@frontend-eng` — chat, inbox, and ops UI surfaces per §3, no backend wiring yet.
+3. `@backend-eng` — `InquiryFlow`/`EscalationResolutionFlow`, the 5 agents, FastAPI routes, local data store, per §2/§4 and ADR-001/002/003.
+4. `@integration-eng` — wire FE ↔ BE per the API contract in §4.
+5. `@qa-eng` — validate against AC-001–011 (§9).
+6. `@security-eng` — assessment before Deliver (§8, required by `aamad.config.yml`).
+7. `@devops-eng` — deploy config, CI, runbook, user guide (§5) — Deliver phase only.
 
 ## Architecture Validation Checklist
 
-- [x] PRD requirements mapped to architectural components (see Traceability Matrix)
-- [x] Agents designed for the domain and selected runtime (§2, ADR-001/ADR-004/ADR-005/ADR-007)
-- [x] Frontend and backend contracts agree on schemas / streaming (§3/§4, ADR-003)
+- [x] PRD requirements mapped to architectural components (every FR/NFR/AC referenced above traces to a §1–§9 element)
+- [x] Agents designed for the domain and selected runtime (5 CrewAI agents, JSON domain config, hotel pilot — §2)
+- [x] Frontend and backend contracts agree on schemas (§3/§4 endpoint table)
 - [x] Secrets via env vars only (§4 Authentication & Secrets)
-- [x] MVP vs Future Work boundaries explicit (§1)
+- [x] MVP vs Future Work boundaries explicit (§1 Core vs Future, inherited from PRD §4 P2)
 - [x] Resolved `AAMAD_TARGET_RUNTIME` recorded in Audit
 
 ## Sources
 
 - `project-context/1.define/prd.md`
 - `project-context/1.define/system-description.md`
-- `project-context/usecase.txt`
-- `aamad.config.yml` (`runtime.target: crewai`; `security.require_security_assessment: true`; `testing.*`; `coding_standards.type_checking: true`; `ui.visual_style: minimal`)
-- `.cursor/templates/sad-template.md`
-- `.claude/rules/aamad-core.md`, `.claude/rules/adapter-registry.md`, `.claude/rules/adapter-crewai.md`, `.claude/rules/delivery-workflow.md`, `.claude/rules/epics-index.md`
+- `aamad.config.yml` (`runtime.target: crewai`, `ui.visual_style: minimal`, `security.require_security_assessment: true`)
+- `.claude/rules/adapter-crewai.md` (YAML config-externalization, sequential-process default, `max_iter`/`max_retry_limit` baselines)
+- Stakeholder decision (2026-08-05): Flow + embedded Crew orchestration, scored against project-derived criteria (ADR-001)
 
 ## Assumptions
 
-- **MRD absence**: no `project-context/1.define/mrd.md` exists. Per `prd.md`'s own Assumptions, this was an intentional skip (internal/portfolio project, no funded market-sizing need). This SAD proceeds using `prd.md`, `system-description.md`, and `usecase.txt` as the sole requirements inputs, per aamad-core.md's guidance to proceed with best-effort drafts on incomplete inputs rather than halt.
-- **No user-stories directory exists** (`project-context/1.define/user-stories/` not found). Traceability in this SAD uses FR/NFR/AC IDs from `system-description.md`/`prd.md` directly instead of story IDs.
-- Frontend framework (React + Vite + TypeScript) is a justified default per template guidance, since PRD is silent on a specific framework (ADR-006).
-- SQLite is assumed as the MVP data store per PRD's "file-based or embedded DB" language (ADR-008); `@backend.eng` may substitute an equivalent embedded store (e.g., file-based JSON/TinyDB) if SQLite proves unsuitable, without requiring a SAD revision, as long as the same logical schema/integrity guarantees (NFR-008) hold.
-- Exact LLM provider/model for CrewAI agents is not pinned by PRD; deferred to `@backend.eng` Build-phase configuration, to be recorded in `backend.md` Audit per adapter-crewai.md.
-- No numeric SLA beyond "a few seconds" (NFR-002) is assumed; this SAD does not invent a precise millisecond target.
-- `AAMAD_TARGET_RUNTIME` environment variable was unset at authoring time; resolved runtime is `crewai` per `aamad.config.yml` `runtime.target`, with no conflict to record (config and default agree).
+- React/Vite frontend and FastAPI backend are SAD-level defaults, not PRD requirements — PRD was silent on both. Justified by 5-week timeline and Python/CrewAI alignment (§1, §3, §4).
+- Non-streaming request/response chosen over token streaming for MVP simplicity; revisit if latency (NFR-002) becomes an issue in practice.
+- SQLite/file-based local storage assumed sufficient for MVP data volume (four hotel scenario categories, no real traffic).
+- `escalation_manager` and `interaction_logger`, named as agents in `prd.md`'s indicative table, are implemented as deterministic Flow logic rather than LLM agents (ADR-002) — behavior-equivalent to their FR/AC requirements, but a resolved implementation-level deviation from the PRD's literal table worth flagging back to the stakeholder if it matters for the "5 agents" framing elsewhere.
+- LLM provider is Anthropic (stakeholder-confirmed, 2026-08-05). Specific models are now resolved per agent (ADR-004): `claude-haiku-4-5` for `query_classifier`/`knowledge_retriever`/`pii_guard`, `claude-sonnet-5` for `sentiment_analyzer`/`response_composer`. `.env.example` (to be created in Phase 2 setup) will define `ANTHROPIC_API_KEY`.
 
 ## Open Questions
 
-- Hosting/infrastructure target for MVP is undecided (carried from PRD §3/§8) — for `@devops.eng` to propose during Phase 3 planning; this SAD only specifies the smallest-viable local/dev deployment shape.
-- Exact LLM provider/model, temperature, and token budgets for CrewAI agents — deferred to `@backend.eng`, must be recorded in `backend.md` Audit.
-- ~~Should the unauthenticated `/ops` review-queue surface be gated behind even a minimal shared secret/basic-auth for MVP?~~ **Resolved (stakeholder-confirmed, 2026-08-05)**: no — keep `/ops` unauthenticated for MVP demo simplicity, consistent with PRD's "no user auth for MVP" scope. The three journeys (Guest, Hotel Ops, Reviewer) remain distinguished only by frontend route/endpoint, not by enforced identity. This is an accepted risk for the local/dev demo, not a gap to close before Deliver; revisit before any wider-than-demo audience (see Risks table and §11 Iteration Priorities).
-- Which specific regulation, if any, PII handling must ultimately comply with (GDPR/CCPA/HIPAA/other) — carried from PRD/system-description; unresolved.
-- Exact encryption-at-rest mechanism for PII-bearing SQLite fields — deferred to `@backend.eng`/`@security.eng`.
-- What is the actual project budget? (Timeline confirmed: 5 weeks — carried from PRD Open Questions, not an architectural blocker.)
-- Full "self-improvement" vision beyond the MVP-scoped human-curated loop — under active stakeholder discussion per PRD §8; MVP architecture (ADR-005) is settled regardless of that discussion's outcome.
-- No `project-context/1.define/user-stories/` directory was found — confirm with `@product.mgr`/stakeholder whether granular user stories are expected before Build phase, or whether FR/NFR/AC-level traceability (as used throughout this SAD) is sufficient.
+Carried forward from `prd.md` (unresolved as of this document):
+
+- Actual budget for the project (timeline confirmed: 5 weeks).
+- Which specific regulation, if any, PII handling must ultimately comply with.
+- Hosting/infrastructure target for MVP — for `@devops-eng` to propose during Phase 3 planning.
+
+New, raised by this SAD:
+
+**Resolved this round**: ADR-002 (`escalation_manager`/`interaction_logger` as deterministic Flow logic, not agents) is confirmed final — see ADR-002 Status. Per-agent Claude model selection is resolved via ADR-004 — Haiku 4.5 for classification/retrieval/PII, Sonnet 5 for sentiment/composition. No agent currently needs Opus 5; documented as the upgrade path if a future role needs deeper multi-step reasoning.
 
 ## Audit
 
 - **Timestamp**: 2026-08-05
 - **Persona**: `system-arch`
-- **Action**: `create-sad`
-- **Resolved runtime**: `crewai` (from `aamad.config.yml` `runtime.target: crewai`; `AAMAD_TARGET_RUNTIME` environment variable was unset, so default resolution applies per `adapter-registry.md` — no conflict between config and default, both resolve to `crewai`)
-- **Inputs used**: `project-context/1.define/prd.md`, `project-context/1.define/system-description.md`, `project-context/usecase.txt`, `aamad.config.yml`, `.cursor/templates/sad-template.md`; `mrd.md` not present (recorded as Assumption, not fabricated); no `user-stories/` directory present (recorded as Open Question)
-- **Adapter rules applied**: `.claude/rules/aamad-core.md`, `.claude/rules/adapter-registry.md`, `.claude/rules/adapter-crewai.md`
-
+- **Action**: `create-sad --mvp`
+- **Resolved runtime**: `crewai` (`AAMAD_TARGET_RUNTIME` env var, consistent with `aamad.config.yml`)
+- **Inputs used**: `prd.md`, `system-description.md` (MRD N/A)
 - **Timestamp**: 2026-08-05
 - **Persona**: `system-arch`
-- **Action**: `create-sad` (follow-up: resolved the `/ops` authentication Open Question per stakeholder input — decided to keep `/ops` unauthenticated for MVP demo simplicity; updated Risks table mitigation and Open Questions accordingly, no other architectural change)
-
-- **Timestamp**: 2026-08-06
+- **Action**: `create-sad --mvp` (follow-up: LLM provider confirmed as Anthropic per stakeholder input; specific model remains an Open Question)
+- **Timestamp**: 2026-08-05
 - **Persona**: `system-arch`
-- **Action**: `create-sad` (follow-up: added Mermaid diagrams to §2 Task/Turn Orchestration, §6 Data Flow, and Logical/Deployment/Data Views for visual clarity — no architectural content changed, diagrams restate existing prose/tables)
+- **Action**: `create-sad --mvp` (follow-up: ADR-002 confirmed final by stakeholder — `escalation_manager`/`interaction_logger` remain deterministic Flow logic, not agents)
+- **Timestamp**: 2026-08-05
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up: ADR-004 added — per-agent Claude model tier resolved: `claude-haiku-4-5` for `query_classifier`/`knowledge_retriever`/`pii_guard`, `claude-sonnet-5` for `sentiment_analyzer`/`response_composer`; no current agent uses Opus 5)
