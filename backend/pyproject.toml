@@ -1,0 +1,60 @@
+[project]
+name = "customer-support-agent-backend"
+version = "0.1.0"
+description = "Backend for customer-support-agent: FastAPI + CrewAI (InquiryFlow / EscalationResolutionFlow). Scaffold only — no business logic yet (see @backend.eng)."
+requires-python = ">=3.11,<3.15"
+license = { text = "Apache-2.0" }
+
+# NOTE (project-mgr / *setup-project): dependency versions are intentionally
+# unpinned (">=") at scaffold time. @backend-eng should pin exact versions
+# once the CrewAI Flow/Crew implementation lands, per aamad-core.md
+# "Deterministic execution" once real code depends on these APIs.
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "crewai>=0.80",
+    "python-dotenv>=1.0",
+    "jsonschema>=4.22",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app"]
+
+# --- Linting (ruff) ---
+# Referenced by delivery-workflow.md CI scaffolding ("lint (ruff/flake8)").
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+# --- Type checking (mypy) ---
+# Required by aamad.config.yml: coding_standards.type_checking: true
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["tests/"]
+
+# --- Testing (pytest) ---
+# Required by aamad.config.yml: testing.require_unit_tests / require_integration_tests
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

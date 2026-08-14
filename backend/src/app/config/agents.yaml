@@ -1,0 +1,28 @@
+# CrewAI agent definitions (framework-level config layer).
+#
+# Scaffolded by @project.mgr (*setup-project). Intentionally empty —
+# @backend.eng fills this in per project-context/1.define/sad.md §2
+# (Multi-Agent System Specification) and adapter-crewai.md's
+# YAML-externalization rule.
+#
+# Expected agents (sad.md §2 table), each with role/goal/backstory/llm:
+#   - query_classifier     (Reasoning Crew, model: claude-haiku-4-5)
+#   - knowledge_retriever   (Reasoning Crew, model: claude-haiku-4-5)
+#   - sentiment_analyzer    (Reasoning Crew, model: claude-sonnet-5)
+#   - response_composer     (Reasoning Crew, model: claude-sonnet-5)
+#   - pii_guard             (Standalone, model: claude-haiku-4-5)
+#
+# NOTE: escalation_manager / interaction_logger are deterministic Flow
+# logic per ADR-002, NOT CrewAI agents — do not add them here.
+#
+# Example shape (do not uncomment without implementing — placeholder only):
+# query_classifier:
+#   role: >
+#     Support Query Classifier
+#   goal: >
+#     Classify an inbound inquiry into a domain-configured intent/category
+#   backstory: >
+#     TODO(@backend.eng)
+#   llm: claude-haiku-4-5
+#   allow_delegation: false
+#   max_iter: 12

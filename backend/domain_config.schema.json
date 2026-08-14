@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://customer-support-agent.local/schemas/domain_config.schema.json",
+  "title": "Domain Configuration",
+  "description": "Schema-validated domain configuration envelope (PRD 'Domain configuration format: JSON, schema-validated'; sad.md §2). Scaffolded by @project.mgr (*setup-project) with a minimal structural envelope only — @backend.eng owns the real taxonomy/knowledge_base/prompts sub-schemas per sad.md FR-012/FR-013.",
+  "type": "object",
+  "required": ["domain", "version", "taxonomy", "knowledge_base", "prompts"],
+  "properties": {
+    "domain": {
+      "type": "string",
+      "description": "Domain identifier, e.g. 'hotel'."
+    },
+    "version": {
+      "type": "string",
+      "description": "Domain config version (semver-style string)."
+    },
+    "description": {
+      "type": "string"
+    },
+    "taxonomy": {
+      "type": "array",
+      "description": "TODO(@backend.eng): intent/category taxonomy entries. Shape undefined at scaffold time.",
+      "items": {}
+    },
+    "knowledge_base": {
+      "type": "array",
+      "description": "TODO(@backend.eng): KB entries retrievable by knowledge_retriever. Shape undefined at scaffold time.",
+      "items": {}
+    },
+    "prompts": {
+      "type": "object",
+      "description": "TODO(@backend.eng): prompt fragments templated into task descriptions/inputs. Shape undefined at scaffold time."
+    }
+  },
+  "additionalProperties": false
+}

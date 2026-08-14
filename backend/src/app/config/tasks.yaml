@@ -1,0 +1,17 @@
+# CrewAI task definitions (framework-level config layer).
+#
+# Scaffolded by @project.mgr (*setup-project). Intentionally empty —
+# @backend.eng fills this in per project-context/1.define/sad.md §2
+# (Task / Turn Orchestration) and adapter-crewai.md's YAML-externalization
+# and `expected_output` rules.
+#
+# Expected reasoning-Crew tasks (sequential process, sad.md §2 step 3),
+# task-context chained: classify -> retrieve -> score_sentiment -> compose.
+#
+# Example shape (do not uncomment without implementing — placeholder only):
+# classify_intent:
+#   description: >
+#     TODO(@backend.eng)
+#   expected_output: >
+#     TODO(@backend.eng)
+#   agent: query_classifier

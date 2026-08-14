@@ -52,6 +52,11 @@ dmypy.json
 .ruff_cache/
 .pytype/
 
+# --- Local data store (backend/data, sad.md SS4) ---
+backend/data/*.db
+backend/data/*.sqlite3
+!backend/data/.gitkeep
+
 # --- Node ---
 node_modules/
 npm-debug.log*

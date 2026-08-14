@@ -1,0 +1,32 @@
+/* Minimal global styles (aamad.config.yml ui.visual_style: minimal).
+   No component library. @frontend.eng owns real styling per
+   project-context/1.define/sad.md SS3 (Frontend Architecture Specification). */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+nav a {
+  margin-right: 1rem;
+}
+
+main {
+  padding: 1rem;
+}

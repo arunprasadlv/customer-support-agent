@@ -1,0 +1,9 @@
+{
+  "$schema": "./domain_config.schema.json",
+  "domain": "hotel",
+  "version": "0.1.0",
+  "description": "Hotel/Hospitality domain configuration (FR-012/FR-013). Placeholder only — @backend.eng populates taxonomy, knowledge_base, and prompts per project-context/1.define/prd.md and sad.md §2.",
+  "taxonomy": [],
+  "knowledge_base": [],
+  "prompts": {}
+}
