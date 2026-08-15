@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types/chat";
+import BotAvatar from "./BotAvatar";
 
 interface EscalationNoticeProps {
   message: ChatMessage;
@@ -13,6 +14,7 @@ interface EscalationNoticeProps {
 export default function EscalationNotice({ message }: EscalationNoticeProps) {
   return (
     <div className="chat-row chat-row--assistant">
+      <BotAvatar />
       <div className="escalation-notice" role="alert">
         <div className="escalation-notice__header">
           <span aria-hidden="true">⚠️</span>

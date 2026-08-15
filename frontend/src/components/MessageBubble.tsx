@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../types/chat";
+import BotAvatar from "./BotAvatar";
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -14,6 +15,7 @@ export default function MessageBubble({ message }: MessageBubbleProps) {
   const isGuest = message.role === "guest";
   return (
     <div className={`chat-row ${isGuest ? "chat-row--guest" : "chat-row--assistant"}`}>
+      {!isGuest && <BotAvatar />}
       <div className={`chat-bubble ${isGuest ? "chat-bubble--guest" : "chat-bubble--assistant"}`}>
         <p>{message.text}</p>
         <span className="chat-bubble__meta">

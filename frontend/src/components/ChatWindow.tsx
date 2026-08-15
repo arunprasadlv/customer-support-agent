@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { HOTEL_NAME } from "../config/brand";
 import { sendInquiry } from "../lib/mockInquiryClient";
 import type { ChatMessage } from "../types/chat";
 import ChatInput from "./ChatInput";
@@ -11,9 +12,9 @@ const WELCOME_MESSAGE: ChatMessage = {
   role: "assistant",
   kind: "text",
   text:
-    "Hi, I'm the hotel support assistant. Ask me about a reservation, your bill, amenities, " +
-    "or anything else — I'll do my best to help, and I'll loop in a human if something needs " +
-    "escalation.",
+    `Hi, I'm the ${HOTEL_NAME} support assistant. Ask me about a reservation, your bill, ` +
+    "amenities, or anything else — I'll do my best to help, and I'll loop in a human if " +
+    "something needs escalation.",
   timestamp: Date.now(),
 };
 

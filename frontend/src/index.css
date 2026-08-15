@@ -32,6 +32,21 @@ body {
   flex-direction: column;
 }
 
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #d0d0d0;
+}
+
+.site-header__brand {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #1a1a1a;
+}
+
 nav a {
   margin-right: 1rem;
 }

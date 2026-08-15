@@ -36,6 +36,25 @@
 
 .chat-row {
   display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  /* New rows fade/slide in on mount. React only mounts genuinely new
+     message elements (existing rows keep their stable `key` and don't
+     remount), so this only plays once per new message, not on every
+     re-render. Neutralized under prefers-reduced-motion by the global
+     reset in index.css. */
+  animation: message-in 0.25s ease-out;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .chat-row--guest {
@@ -44,6 +63,35 @@
 
 .chat-row--assistant {
   justify-content: flex-start;
+}
+
+.bot-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #2563eb;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.bot-avatar--thinking {
+  animation: bot-avatar-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bot-avatar-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.8;
+  }
 }
 
 .chat-bubble {

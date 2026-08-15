@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import InteractionLog from "../components/InteractionLog";
 import ReviewQueue from "../components/ReviewQueue";
+import { HOTEL_NAME } from "../config/brand";
 import "../styles/ops.css";
 
 /**
@@ -20,12 +21,12 @@ export default function Ops() {
   // SC 2.4.2 Page Titled — SPA routes share one HTML document, so each
   // route sets its own title on mount (mirrors Chat.tsx/Inbox.tsx).
   useEffect(() => {
-    document.title = "Ops — Interaction Log & KB Review — customer-support-agent";
+    document.title = `Ops — Interaction Log & KB Review — ${HOTEL_NAME}`;
   }, []);
 
   return (
     <section className="ops-page">
-      <h1>Ops</h1>
+      <h1>{HOTEL_NAME} — Ops</h1>
       <p className="ops-page__subtitle">
         Internal view for hotel support/ops staff: every processed inquiry, and the candidate
         knowledge-base entries generated from escalation resolutions awaiting Reviewer decision.

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import EmailInbox from "../components/EmailInbox";
+import { HOTEL_NAME } from "../config/brand";
 import "../styles/inbox.css";
 
 /**
@@ -14,12 +15,12 @@ export default function Inbox() {
   // SC 2.4.2 Page Titled — SPA routes share one HTML document, so each
   // route sets its own title on mount (mirrors Chat.tsx).
   useEffect(() => {
-    document.title = "Simulated Email Inbox — customer-support-agent";
+    document.title = `Email Inbox — ${HOTEL_NAME}`;
   }, []);
 
   return (
     <section className="inbox-page">
-      <h1>Simulated Email Inbox</h1>
+      <h1>{HOTEL_NAME} — Email Inbox</h1>
       <p className="inbox-page__subtitle">
         Submit a request the way you'd send an email — this demo runs it through the same
         support pipeline as chat, and simulates escalation to a human when needed.
