@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import ChatWindow from "../components/ChatWindow";
 import "../styles/chat.css";
 
@@ -9,6 +10,12 @@ import "../styles/chat.css";
  * src/lib/mockInquiryClient.ts for the swap boundary.
  */
 export default function Chat() {
+  // SC 2.4.2 Page Titled — SPA routes share one HTML document, so each
+  // route sets its own title on mount.
+  useEffect(() => {
+    document.title = "Hotel Support Chat — customer-support-agent";
+  }, []);
+
   return (
     <section className="chat-page">
       <h1>Hotel Support Chat</h1>

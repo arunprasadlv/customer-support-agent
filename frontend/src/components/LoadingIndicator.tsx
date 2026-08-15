@@ -5,7 +5,10 @@
 export default function LoadingIndicator() {
   return (
     <div className="chat-row chat-row--assistant">
-      <div className="chat-bubble chat-bubble--assistant chat-bubble--loading" aria-live="polite">
+      {/* Announcement is handled by the parent role="log" region
+          (ChatWindow) — no separate aria-live here to avoid a
+          redundant/duplicate announcement. */}
+      <div className="chat-bubble chat-bubble--assistant chat-bubble--loading">
         <span className="typing-dot" />
         <span className="typing-dot" />
         <span className="typing-dot" />

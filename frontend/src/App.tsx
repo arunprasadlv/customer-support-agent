@@ -13,12 +13,15 @@ import Ops from "./routes/Ops";
 export default function App() {
   return (
     <>
-      <nav>
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
+      <nav aria-label="Primary">
         <NavLink to="/chat">Chat</NavLink>
         <NavLink to="/inbox">Inbox</NavLink>
         <NavLink to="/ops">Ops</NavLink>
       </nav>
-      <main>
+      <main id="main-content">
         <Routes>
           <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<Chat />} />

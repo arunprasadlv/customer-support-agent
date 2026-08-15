@@ -35,7 +35,13 @@ export default function ChatWindow() {
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Operable: respect prefers-reduced-motion for auto-scroll.
+    const prefersReducedMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    scrollAnchorRef.current?.scrollIntoView({
+      behavior: prefersReducedMotion ? "auto" : "smooth",
+    });
   }, [messages, isLoading]);
 
   async function handleSend(text: string) {
@@ -66,7 +72,13 @@ export default function ChatWindow() {
 
   return (
     <div className="chat-window">
-      <div className="chat-messages">
+      <div
+        className="chat-messages"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
+        aria-label="Chat conversation"
+      >
         {messages.map((message) =>
           message.kind === "escalation" ? (
             <EscalationNotice key={message.id} message={message} />

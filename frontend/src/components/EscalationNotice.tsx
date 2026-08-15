@@ -13,7 +13,7 @@ interface EscalationNoticeProps {
 export default function EscalationNotice({ message }: EscalationNoticeProps) {
   return (
     <div className="chat-row chat-row--assistant">
-      <div className="escalation-notice" role="status">
+      <div className="escalation-notice" role="alert">
         <div className="escalation-notice__header">
           <span aria-hidden="true">⚠️</span>
           <strong>Escalated — a human is being looped in (simulated)</strong>

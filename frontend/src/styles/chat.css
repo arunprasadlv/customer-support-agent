@@ -71,9 +71,14 @@
 }
 
 .chat-bubble__meta {
+  /* SC 1.4.3 Contrast (Minimum): deliberately solid (no opacity blend).
+     Reducing opacity here would blend the timestamp toward its
+     background and drop below 4.5:1 for this small (0.72rem) text —
+     e.g. white-on-#2563eb at opacity 0.7 measures ~3.34:1. Using the
+     same solid color as the message text (already verified >=4.5:1)
+     and differentiating by size only keeps this compliant. */
   display: block;
   font-size: 0.72rem;
-  opacity: 0.7;
 }
 
 .chat-bubble--loading {
@@ -116,10 +121,14 @@
    (PRD AC-003, sad.md SS3): warm warning palette + icon + explicit
    label, never styled to look like a normal resolved answer. */
 .escalation-notice {
+  /* SC 1.4.11 Non-text Contrast: border darkened from the original
+     #f0a94f/#d9822b pair (~1.84:1 / ~2.69:1 against #fff4e5 — both
+     failed the 3:1 minimum for a UI component boundary) to #b45f18,
+     which measures ~4.2:1 against this background. */
   max-width: 85%;
   background: #fff4e5;
-  border: 1px solid #f0a94f;
-  border-left: 4px solid #d9822b;
+  border: 1px solid #b45f18;
+  border-left: 4px solid #b45f18;
   border-radius: 8px;
   padding: 0.75rem 1rem;
   color: #6b3d00;
@@ -146,9 +155,12 @@
 }
 
 .chat-input input {
+  /* SC 1.4.11 Non-text Contrast: form-field border darkened from #ccc
+     (~1.54:1 against the #fafafa input-row background — fails the 3:1
+     minimum) to #6b7280, which measures ~4.6:1. */
   flex: 1;
   padding: 0.55rem 0.75rem;
-  border: 1px solid #ccc;
+  border: 1px solid #6b7280;
   border-radius: 6px;
   font-size: 1rem;
 }
