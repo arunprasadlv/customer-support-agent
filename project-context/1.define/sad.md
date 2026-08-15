@@ -69,7 +69,7 @@
 
 **Backend**: Python + FastAPI. Justification: matches CrewAI's Python runtime (no cross-language boundary), fast to scaffold a chat/email/review-queue API surface within the timeline, async-friendly for streaming responses later if needed.
 
-**Streaming**: Non-streaming for MVP — NFR-002's "a few seconds" target doesn't require token-level streaming; request/response is simpler to build and test within 5 weeks. Flagged as a Future Work candidate if response composition proves slow in practice.
+**Streaming**: Non-streaming for MVP — NFR-002's "a few seconds" target doesn't require token-level streaming; request/response is simpler to build and test within 5 weeks. Flagged as a Future Work candidate if response composition proves slow in practice — but explicitly **not** an acceptable fallback for an unmeasured/failing latency spike; see §7 Latency Spike & Fallback Plan.
 
 ### 2. Multi-Agent System Specification
 
@@ -92,18 +92,56 @@ Memory is deliberately **none/short-lived** for all agents (reproducibility per 
 - **Rationale**: `pii_guard` and `query_classifier` run unconditionally on every single inquiry (FR-011, FR-002) — cost and latency compound most there, and both tasks (pattern-based PII detection, classification against a small fixed taxonomy) are well within Haiku's capability. `sentiment_analyzer`'s score directly gates the escalation decision (FR-006/AC-002) — a lighter model under-calling frustration in a polite-but-furious message would silently degrade a Must-priority behavior, so the extra cost buys correctness on the one score that matters most. `response_composer` is the system's guest-facing voice and carries the AC-003 "never fabricate" bar — the highest quality requirement in the system.
 - **Consequences**: 3 of 5 model calls per inquiry run on the cheap/fast tier, which directly serves NFR-002 (a few seconds end-to-end across 5 sequential calls). No agent currently uses Opus 5 — the flagship tier has no slot in this architecture, since ADR-002 already moved the one place genuinely hard agentic judgment could have lived (escalation) out to deterministic code. Opus 5 remains the documented upgrade path if a future role needs real multi-step reasoning (e.g., cross-domain synthesis once a second vertical exists).
 
+#### ADR-005: `knowledge_retriever` uses keyword/section-scored retrieval against `domain_config.json` — no vector store
+
+- **Context**: `domain_config.schema.json` (scaffolded by `@project-mgr`) left `taxonomy` and `knowledge_base` item shapes as `"TODO(@backend.eng): shape undefined at scaffold time"`. Without a pinned algorithm, `knowledge_retriever`'s `kb_search` tool is unspecified — risking an ad hoc second retrieval stack (e.g., embeddings/a vector-DB SaaS) that would contradict §4 Data Architecture's existing "no vector DB / external database for MVP" decision.
+- **Decision**: `kb_search` is a pure, local, deterministic function — no embeddings, no external call:
+  1. **Filter** `domain_config.json`'s `knowledge_base` array to entries where `entry.intent == intent` (the `ClassificationResult.intent` from `classify_task`) — this is what keeps retrieval domain-agnostic (driven by config content, not hardcoded category branches), satisfying FR-012/AC-009.
+  2. **Score** each surviving entry by keyword overlap: `relevance_score = |keywords(query) ∩ entry.keywords| / |entry.keywords|`.
+  3. **Floor**: drop entries scoring below **`0.20`**.
+  4. Return the top **3** surviving entries as `retrieved_snippets`; `match_found = true` iff at least one entry cleared the floor.
+- **Config shapes** (resolves the schema's TODOs):
+  ```
+  taxonomy[]:       { intent: str, label: str, keywords: string[] }
+  knowledge_base[]: { kb_entry_id: str, intent: str, section: str, keywords: string[], content: str }
+  ```
+- **Required seed set**: one `taxonomy` entry per FR-013 scenario category — `reservations_booking`, `checkin_checkout_billing`, `room_service_amenities`, `general_complaints` — each with at least one `knowledge_base` entry, so Phase 1 of MVP Build Sequencing (below) has real content to retrieve against.
+- **Rationale**: Keyword/section scoring is fully explainable (every `relevance_score` traces to specific overlapping words, unlike a cosine-similarity float from an embedding model), requires zero new infrastructure, and is trivially fast enough for NFR-002 at MVP's KB scale (a handful of entries per intent, four intents). The floor is what makes `match_found=false` an honest signal rather than "always return the closest thing" — directly protects AC-003's no-fabrication rule via `ComposedResponse.grounded` (see Typed Task Outputs).
+- **Consequences**: Retrieval quality is bounded by keyword overlap, not semantic similarity — a guest phrasing a question with none of the KB entry's keywords will miss even on-topic content and correctly escalate rather than silently degrade. Documented as a known MVP limitation, not a bug; a vector-based upgrade is the natural Future Work path if this proves too blunt in QA.
+
 **Task / Turn Orchestration**
 
 Flow (`InquiryFlow`), one instance per inquiry, regardless of channel:
 
 1. **`@start` — intake_normalize**: receive raw inquiry (chat message or simulated-email submission) → normalize to `{channel, raw_text, sender_id, timestamp}`.
-2. **`@listen` — pii_redact**: `pii_guard` agent redacts/masks PII in `raw_text` → produces `clean_text`. Runs before step 3, no exceptions (FR-011).
-3. **`@listen` — run_reasoning_crew**: `reasoning_crew.kickoff(clean_text, domain_config)` — sequential process, task-context chaining passes `intent` → `retrieved_snippets` → `sentiment_score` → `draft_response` through the four agents in order.
-4. **`@router` — escalation_gate**: reads `sentiment_score` and classifier confidence from step 3's output.
-   - **High-frustration or low-confidence** → `escalate` branch: flag the interaction for simulated human handoff; guest-visible message states this clearly (AC-003). The (simulated) human's resolution is recorded separately once submitted — see the decoupled `EscalationResolutionFlow` below — not blocked on here.
-   - **Else** → `respond` branch: deliver `draft_response`.
+2. **`@listen` — pii_redact**: `pii_guard` agent redacts/masks PII in `raw_text` → produces `clean_text` and `redaction_actions` (see Typed Task Outputs below). Runs before step 3, no exceptions (FR-011).
+3. **`@listen` — run_reasoning_crew**: `reasoning_crew.kickoff(clean_text, domain_config)` — sequential process, task-context chaining passes `intent` → `retrieved_snippets` → `sentiment_score` → `draft_response` through the four agents in order, each field typed per the Pydantic contracts below.
+4. **`@router` — escalation_gate**: reads `confidence`, `sentiment_score`, `grounded` from step 3's output (see Typed Task Outputs below) and evaluates, in order, three independent OR'd conditions — any one true routes to `escalate`:
+   - `grounded == false` (not tunable — AC-003 mandates escalation over fabrication whenever there's no KB match)
+   - `confidence <= 0.70` (classifier confidence at or below this line is not trusted)
+   - `sentiment_score >= 0.75` (equivalent to `sentiment_label == "angry"` — see Typed Task Outputs)
+   - **`escalate` branch** (any condition above true): flag the interaction for simulated human handoff; guest-visible message states this clearly (AC-003). The (simulated) human's resolution is recorded separately once submitted — see the decoupled `EscalationResolutionFlow` below — not blocked on here.
+   - **`respond` branch** (else): deliver `draft_response`.
+   - All three numbers are MVP starting values, deliberately simple (independent thresholds, no compound/weighted scoring) and expected to be tuned from `@qa-eng` acceptance results — not a final calibration.
+   - **Ordering note**: as documented, this step runs after the full reasoning Crew (including `compose_response_task`) completes. If the §7 Latency Spike shows p95 missing target, fallback (2) there reorders this gate to run before `compose_response_task`, invoking the composer only on the `respond` branch — not applied by default, only on measured evidence.
 5. **`@listen` — deliver_response**: send `draft_response` (or escalation notice) back via the originating channel — chat reply or simulated email reply (FR-005, FR-010, AC-006).
 6. **`@listen` — log_interaction**: always runs (both branches) — persists one interaction-log record: query, classification, sentiment, PII actions taken, outcome (FR-007).
+
+**Typed Task Outputs (Pydantic contracts)**
+
+Every CrewAI `Task` in the reasoning Crew, plus `pii_guard`'s task, binds `output_pydantic=<Model>` (per `adapter-crewai.md`'s structured-output-contract Quality Gate) — no task returns free-form prose for a downstream step or the `@router` to parse. This is what makes `escalation_gate` (step 4) a pure function over typed fields rather than a text-sniffing heuristic:
+
+| Task (agent) | Model | Fields |
+|---|---|---|
+| `redact_pii_task` (`pii_guard`) | `RedactionResult` | `clean_text: str`, `redaction_actions: list[RedactionAction]` — `RedactionAction = {entity_type: str, span_start: int, span_end: int, method: Literal["mask","remove"]}` |
+| `classify_task` (`query_classifier`) | `ClassificationResult` | `intent: str`, `confidence: float` (0.0–1.0) |
+| `retrieve_knowledge_task` (`knowledge_retriever`) | `KBRetrievalResult` | `retrieved_snippets: list[KBSnippet]`, `match_found: bool` — `KBSnippet = {kb_entry_id: str, content: str, relevance_score: float}`; `relevance_score` and `match_found` are computed by the keyword/section-scored algorithm in ADR-005, not a vector similarity |
+| `analyze_sentiment_task` (`sentiment_analyzer`) | `SentimentResult` | `sentiment_score: float` (0.0–1.0), `sentiment_label: Literal["neutral","frustrated","angry"]` — boundaries: `neutral` < 0.40, `frustrated` 0.40–0.74, `angry` ≥ 0.75 |
+| `compose_response_task` (`response_composer`) | `ComposedResponse` | `draft_response: str`, `grounded: bool` (false whenever `match_found` was false — structurally enforces AC-003's no-fabrication rule, not just a prompt instruction) |
+
+`escalation_gate` (step 4) reads exactly three typed fields — `confidence: float`, `sentiment_score: float`, `grounded: bool` — nothing else; this closed input set, combined with the pinned thresholds in step 4 (`confidence <= 0.70`, `sentiment_score >= 0.75`, `grounded == false`), is what makes ADR-002's "pure function" claim true in code, not just in the ADR's prose.
+
+`log_interaction_task` maps `draft_response → response_text` and carries `intent`, `confidence`, `sentiment_score`, and a summary of `redaction_actions` through unchanged into the `interaction_log` record (§4/§6) — same field names throughout, no re-mapping/renaming between the Flow, the Crew, and the persisted log.
 
 Decoupled second flow, `EscalationResolutionFlow` — triggered independently whenever a (simulated) human operator submits a resolution for an escalated interaction (this does not keep `InquiryFlow` waiting; escalation and its eventual human resolution are asynchronous by nature):
 
@@ -182,10 +220,20 @@ Guest (chat or simulated email) → FastAPI route → `InquiryFlow` (`pii_guard`
 
 ### 7. Performance & Scalability Specifications
 
-- Response-time target: a few seconds per inquiry end-to-end (NFR-002) — achievable non-streaming given only 4 sequential LLM calls (classify, retrieve-grounding, sentiment, compose) plus 1 PII-redaction call per inquiry.
+- Response-time target: **p95 ≤ 5 seconds** end-to-end per inquiry — an engineering interpretation of NFR-002's qualitative "a few seconds," pinned so it's measurable rather than assumed. Not yet verified: the pipeline is 5 sequential LLM calls per inquiry (`pii_guard`, `query_classifier`, `knowledge_retriever`, `sentiment_analyzer`, `response_composer`), 2 of them on the Sonnet tier (ADR-004) — treated as a spike to measure, not a given.
 - Concurrency: not a design driver for MVP (no real traffic) — single-process FastAPI is sufficient.
 - Scaling path: deferred entirely (Out of Scope — enterprise-scale load is explicit Future Work in the PRD).
 - Token/cost controls: `max_iter <= 12` per agent task; no retries beyond `max_retry_limit >= 2` to bound cost per inquiry.
+- **Hard ceiling**: Flow-level `max_execution_time` set to **10s** (2× the p95 target, per `adapter-crewai.md`'s execution-budget guidance) — a stuck or abnormally slow run degrades automatically to the `escalate` branch rather than hanging indefinitely.
+
+**Latency Spike & Fallback Plan**
+
+- **Spike timing**: immediately after Phase 1 (`/chat` vertical slice — see MVP Build Sequencing) lands, *before* starting Phase 2, `@qa-eng`/`@backend-eng` measure p95 latency over a representative sample (20+ requests spanning all four hotel scenario categories), using the per-task Trace Log timing already required by `adapter-crewai.md` Logging. This is a required gate before Phase 2 begins, not an optional nice-to-have.
+- **If p95 exceeds 5s, apply this fallback ladder incrementally** (measure again after each step; stop as soon as target is met) — ordered by invasiveness/risk, not by expected savings:
+  1. **Downgrade `sentiment_analyzer` from Sonnet to Haiku** — a config-only change (`agents.yaml`), fully reversible, no architecture impact. Re-run AC-002 fixtures afterward to confirm sentiment-scoring accuracy didn't regress (ADR-004 put this on Sonnet specifically to avoid under-calling frustration — this fallback carries real quality risk, not just a cost/latency trade).
+  2. **Skip `compose_response_task` on the `escalate` branch** — a pipeline reordering, not a config tweak: `escalation_gate`'s three inputs (`confidence`, `sentiment_score`, `grounded`) are all available once `sentiment_analyzer` finishes (`grounded` is just `match_found` carried over from `retrieve_knowledge_task` — see Typed Task Outputs), so `compose_response_task` does not need to run before the gate decides. Reorder the Crew to classify → retrieve → sentiment → `escalation_gate` → `compose_response_task` only on the `respond` branch. This removes one full Sonnet call on every inquiry that was going to escalate anyway, with zero quality trade-off (today that composed output is silently discarded on the escalate branch). If adopted, §2 step 4's ordering is amended accordingly — not applied by default; only on evidence from the spike.
+  3. **Last resort**: revisit `response_composer`'s Sonnet tier on the `respond` branch itself — this is the one guest-facing, AC-003-critical call, so it's the most reluctant step, attempted only if (1)+(2) together still miss target.
+- **Explicitly ruled out as a fix**: reintroducing streaming. Non-streaming is an already-settled decision (§1 Streaming) — streaming would hide latency from the guest without reducing actual compute time, and silently reopening a closed decision to paper over an unmeasured assumption is exactly the anti-pattern this plan exists to avoid. If streaming is ever revisited, it must be its own deliberate decision, not a Band-Aid applied under deadline pressure.
 
 ### 8. Security & Compliance Architecture
 
@@ -209,13 +257,27 @@ Guest (chat or simulated email) → FastAPI route → `InquiryFlow` (`pii_guard`
 - Success metrics tied to PRD §7: AC-001–011 pass rate, qualitative classification/escalation correctness across the four scenario categories, NFR-002 latency observed in practice.
 - Iteration priorities after first working demo: (1) close any AC gaps found by `@qa-eng`, (2) revisit the self-improvement roadmap items from the stakeholder brainstorm (LLM-assisted KB drafting, gap detection — currently Future Work, not yet committed).
 
+## MVP Build Sequencing
+
+All three frontend surfaces (`/chat`, `/inbox`, `/ops`) are already implemented against mock clients (`mockInquiryClient.ts`, `mockEmailClient.ts`, `mockOpsData.ts`) — the `@frontend-eng` epic is complete. Remaining work is `@backend-eng`/`@integration-eng`, and per reviewer feedback it proceeds as a vertical slice through one user journey at a time, not all three at once:
+
+| Phase | Scope | Wires up | Proves |
+|---|---|---|---|
+| **1** | Prerequisite: seed `domain_config.json` with the 4 FR-013 taxonomy/KB entries per ADR-005 (done — see Sources). Then backend `InquiryFlow` for `channel=chat` only: `pii_guard` → reasoning Crew (retrieval per ADR-005) → `escalation_gate` (§2 step 4, thresholds now pinned) → respond-or-escalate → `log_interaction`. No `EscalationResolutionFlow`, no Reviewer write path yet — escalated interactions are flagged and logged, nothing more. | `/chat` (replaces `mockInquiryClient.ts` with the real `POST /chat` per §4) | AC-001, AC-002, AC-003, AC-007, AC-008, AC-009 |
+| **2** | Add `channel=email` to `InquiryFlow` (same pipeline, different adapter). Add `EscalationResolutionFlow` — now needed since Phase 1 produces real escalations to resolve. | `/inbox` (replaces `mockEmailClient.ts` with `POST /email`) | AC-006, AC-010 |
+| **3** | Review-queue endpoints + the Reviewer approve/reject write path — the third, KB-write-only path (NFR-008). | `/ops` (replaces `mockOpsData.ts` with `GET /interactions`, `GET/POST /review-queue/...`) | AC-011 |
+
+Phase 1 is the walking skeleton: it is the only phase that touches every architectural layer (Flow, reasoning Crew, PII gate, escalation gate, persistence) end-to-end, so it de-risks the rest of the build before `/inbox` and `/ops` — which mostly add a channel adapter and a write path onto an already-proven pipeline — are attempted.
+
+**Gate between Phase 1 and Phase 2**: the §7 Latency Spike (measure p95, apply the fallback ladder if needed) runs immediately after Phase 1 lands and before Phase 2 starts — cheaper to fix the reasoning Crew's shape once, on the smallest working slice, than after `/inbox` doubles the traffic through the same pipeline.
+
 ## Implementation Guidance for AI Development Agents
 
-1. `@project-mgr` — environment/dependency setup per `setup.md` (Python + FastAPI + CrewAI backend, React/Vite frontend, `config/agents.yaml`, `config/tasks.yaml`, `domain_config.json` scaffolds).
-2. `@frontend-eng` — chat, inbox, and ops UI surfaces per §3, no backend wiring yet.
-3. `@backend-eng` — `InquiryFlow`/`EscalationResolutionFlow`, the 5 agents, FastAPI routes, local data store, per §2/§4 and ADR-001/002/003.
-4. `@integration-eng` — wire FE ↔ BE per the API contract in §4.
-5. `@qa-eng` — validate against AC-001–011 (§9).
+1. `@project-mgr` — environment/dependency setup per `setup.md` (Python + FastAPI + CrewAI backend, `config/agents.yaml`, `config/tasks.yaml`, `domain_config.json` scaffolds). Frontend scaffold already exists.
+2. `@frontend-eng` — **complete**: chat, inbox, and ops UI surfaces built per §3, running against mock clients pending backend wiring.
+3. `@backend-eng` — `InquiryFlow`/`EscalationResolutionFlow`, the 5 agents, FastAPI routes, local data store, per §2/§4 and ADR-001/002/003 — built in the 3 phases above, Phase 1 first.
+4. `@integration-eng` — wire FE ↔ BE per the API contract in §4, replacing each mock client as its phase's backend work lands (see MVP Build Sequencing table).
+5. `@qa-eng` — validate against AC-001–011 (§9), phase by phase as each lands rather than only at the end.
 6. `@security-eng` — assessment before Deliver (§8, required by `aamad.config.yml`).
 7. `@devops-eng` — deploy config, CI, runbook, user guide (§5) — Deliver phase only.
 
@@ -235,6 +297,7 @@ Guest (chat or simulated email) → FastAPI route → `InquiryFlow` (`pii_guard`
 - `aamad.config.yml` (`runtime.target: crewai`, `ui.visual_style: minimal`, `security.require_security_assessment: true`)
 - `.claude/rules/adapter-crewai.md` (YAML config-externalization, sequential-process default, `max_iter`/`max_retry_limit` baselines)
 - Stakeholder decision (2026-08-05): Flow + embedded Crew orchestration, scored against project-derived criteria (ADR-001)
+- `backend/domain_config.json`, `backend/domain_config.schema.json` — seeded/formalized 2026-08-06 per ADR-005
 
 ## Assumptions
 
@@ -243,6 +306,8 @@ Guest (chat or simulated email) → FastAPI route → `InquiryFlow` (`pii_guard`
 - SQLite/file-based local storage assumed sufficient for MVP data volume (four hotel scenario categories, no real traffic).
 - `escalation_manager` and `interaction_logger`, named as agents in `prd.md`'s indicative table, are implemented as deterministic Flow logic rather than LLM agents (ADR-002) — behavior-equivalent to their FR/AC requirements, but a resolved implementation-level deviation from the PRD's literal table worth flagging back to the stakeholder if it matters for the "5 agents" framing elsewhere.
 - LLM provider is Anthropic (stakeholder-confirmed, 2026-08-05). Specific models are now resolved per agent (ADR-004): `claude-haiku-4-5` for `query_classifier`/`knowledge_retriever`/`pii_guard`, `claude-sonnet-5` for `sentiment_analyzer`/`response_composer`. `.env.example` (to be created in Phase 2 setup) will define `ANTHROPIC_API_KEY`.
+- `backend/domain_config.json` is seeded (2026-08-06) with the 4 FR-013 taxonomy entries and 3 `knowledge_base` entries each (12 total), per ADR-005's shapes; `backend/domain_config.schema.json` updated to formalize those shapes (was previously `"TODO(@backend.eng): shape undefined"`). Keyword lists are a reasonable MVP starting set, not exhaustively tuned — `@backend-eng`/`@qa-eng` may extend them if Phase 1 testing shows real guest phrasing missing common keywords (ADR-005 Consequences already flags this as an expected limitation, not a bug).
+- NFR-002's p95 ≤ 5s target and 10s hard ceiling (§7) are engineering interpretations of PRD's qualitative "a few seconds," not stakeholder-confirmed numbers — reasonable defaults pending the Phase 1 latency spike's actual measurement, not a guarantee the unmodified 5-call pipeline will meet them.
 
 ## Open Questions
 
@@ -254,7 +319,9 @@ Carried forward from `prd.md` (unresolved as of this document):
 
 New, raised by this SAD:
 
-**Resolved this round**: ADR-002 (`escalation_manager`/`interaction_logger` as deterministic Flow logic, not agents) is confirmed final — see ADR-002 Status. Per-agent Claude model selection is resolved via ADR-004 — Haiku 4.5 for classification/retrieval/PII, Sonnet 5 for sentiment/composition. No agent currently needs Opus 5; documented as the upgrade path if a future role needs deeper multi-step reasoning.
+**Resolved this round**:
+
+ADR-002 (`escalation_manager`/`interaction_logger` as deterministic Flow logic, not agents) is confirmed final — see ADR-002 Status. Per-agent Claude model selection is resolved via ADR-004 — Haiku 4.5 for classification/retrieval/PII, Sonnet 5 for sentiment/composition. No agent currently needs Opus 5; documented as the upgrade path if a future role needs deeper multi-step reasoning. `escalation_gate` numeric thresholds resolved (2026-08-06): `confidence <= 0.70` OR `sentiment_score >= 0.75` OR `grounded == false` → escalate (§2 step 4); `sentiment_label` boundaries pinned to match (`neutral` < 0.40, `frustrated` 0.40–0.74, `angry` ≥ 0.75). Explicitly a simple, independently-thresholded MVP starting point, not a tuned/calibrated model — expected to move based on `@qa-eng` acceptance results against AC-002/AC-003. Build sequencing resolved (2026-08-06): frontend is complete (all 3 surfaces built against mock clients); backend/integration proceeds as a 3-phase vertical slice — `/chat` first (full pipeline), then `/inbox`, then `/ops` — see "MVP Build Sequencing". `knowledge_retriever`'s retrieval algorithm resolved (2026-08-06) via ADR-005: keyword/section-scored matching against `domain_config.json`, floor `0.20`, top `3` — no vector store. `domain_config.json` seeded with all 4 FR-013 scenario categories (see Assumptions). NFR-002 treated as a measured spike, not an assumption (2026-08-06): p95 ≤ 5s target, 10s hard ceiling, mandatory measurement gate between Phase 1 and Phase 2, and a pre-agreed fallback ladder (Haiku sentiment → skip composer on escalate → last-resort composer downgrade) — streaming explicitly ruled out as a fix (§7).
 
 ## Audit
 
@@ -272,3 +339,18 @@ New, raised by this SAD:
 - **Timestamp**: 2026-08-05
 - **Persona**: `system-arch`
 - **Action**: `create-sad --mvp` (follow-up: ADR-004 added — per-agent Claude model tier resolved: `claude-haiku-4-5` for `query_classifier`/`knowledge_retriever`/`pii_guard`, `claude-sonnet-5` for `sentiment_analyzer`/`response_composer`; no current agent uses Opus 5)
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 1: added "Typed Task Outputs (Pydantic contracts)" under §2 — named `output_pydantic` fields for every reasoning-Crew task and `pii_guard`'s task, so `escalation_gate` reads only typed fields; raised numeric-threshold values as a new Open Question, deliberately left unresolved pending separate decision)
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 2: pinned `escalation_gate` numeric thresholds — `confidence <= 0.70` OR `sentiment_score >= 0.75` OR `grounded == false` → escalate; pinned `sentiment_label` boundaries to match; resolved the Open Question raised by item 1)
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 3: added "MVP Build Sequencing" section — 3-phase vertical slice (`/chat` → `/inbox` → `/ops`) for `@backend-eng`/`@integration-eng`; noted `@frontend-eng` epic already complete against mock clients; updated Implementation Guidance list accordingly)
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 4: added ADR-005 — keyword/section-scored `knowledge_retriever` retrieval against `domain_config.json`, no vector store, floor 0.20/top 3; pinned `taxonomy`/`knowledge_base` entry shapes; seeded `backend/domain_config.json` with all 4 FR-013 scenario categories (12 KB entries total) and formalized `backend/domain_config.schema.json` to match, also fixing a pre-existing gap where `$schema` wasn't declared under `properties`)
+- **Timestamp**: 2026-08-06
+- **Persona**: `system-arch`
+- **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 5: rewrote §7 Performance & Scalability — pinned NFR-002 to p95 ≤ 5s / 10s hard ceiling, added a mandatory Phase 1→2 latency-spike gate and a 3-step fallback ladder (Haiku sentiment tier → reorder `escalation_gate` before `compose_response_task` on the escalate branch → last-resort composer downgrade), explicitly ruled out streaming as a fallback; cross-referenced from §1 Streaming, §2 `escalation_gate`, and MVP Build Sequencing)
