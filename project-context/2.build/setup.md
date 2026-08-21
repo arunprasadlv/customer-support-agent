@@ -104,20 +104,22 @@ Root `.gitignore` already covered `.env`/`.env.*` (with `!.env.example` exceptio
 
 ### 5. How to install and run locally
 
-**Backend** (from repo root; reuses the existing root `.venv` — Python 3.14.5 — rather than a second per-package venv, since this is a single-developer project with one Python environment):
+**Backend** (uses a dedicated `backend/.venv` — Python 3.11.16 — **not** the root `.venv`, which runs Python 3.14.5 and cannot install `crewai` (`crewai` requires `<3.14`); see Open Questions/Audit below for how this was resolved during `*develop-be`):
 
 ```bash
+cd backend
+# create the venv once (uv-managed CPython 3.11; any 3.11.x interpreter works):
+uv venv --python 3.11
 # Windows (PowerShell): .venv\Scripts\Activate.ps1
 # Git Bash: source .venv/Scripts/activate
 source .venv/Scripts/activate
-pip install -e "./backend[dev]"
-cp backend/.env.example backend/.env   # then fill in ANTHROPIC_API_KEY
-cd backend
+pip install -e ".[dev]"
+cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 uvicorn app.main:app --reload --port 8000 --app-dir src
 # Health check: curl http://localhost:8000/health -> {"status":"ok"}
 ```
 
-Run tests/lint/type-check once dependencies are installed:
+Run tests/lint/type-check once dependencies are installed (from `backend/`, with `.venv` activated, or via the venv's interpreter directly — `./.venv/Scripts/python.exe -m pytest` etc. — if not activated):
 
 ```bash
 cd backend
@@ -154,14 +156,14 @@ Both servers run independently for now — no proxy/integration wiring exists ye
 - **Frontend routing library**: `react-router-dom` v7 chosen as the routing library — PRD/SAD name React+Vite+TS but don't name a router. Standard/lowest-friction default for a 3-route SPA.
 - **Frontend styling**: plain minimal CSS chosen over Tailwind — both were explicitly offered as options; `aamad.config.yml ui.visual_style: minimal` plus `sad.md` §3 "no heavy component library" favored the simpler option with no added build tooling.
 - **Domain config placement**: `domain_config.json`/`domain_config.schema.json` placed at `backend/` root (not `backend/src/app/`) to keep the domain-config layer visibly separate from the framework-config layer (`src/app/config/*.yaml`), per `sad.md` §2's "two separate configuration layers" language. This is a scaffold-time layout choice, not a SAD-mandated path.
-- **Single Python environment**: reused the pre-existing root `.venv` for the backend rather than creating a separate `backend/.venv`, since this is a single-developer 5-week project (PRD §8) with one Python dependency set. Raised explicitly during this action and confirmed with the operator before proceeding.
+- **Single Python environment (superseded)**: this action originally reused the pre-existing root `.venv` for the backend rather than creating a separate `backend/.venv`, since this is a single-developer 5-week project (PRD §8) with one Python dependency set. **Superseded during `*develop-be` (2026-08-19)**: the root `.venv` runs Python 3.14.5, which `crewai` cannot install against (`crewai` requires `<3.14`) — `@backend.eng` created a dedicated `backend/.venv` on Python 3.11.16 (via `uv`), already covered by the existing `.venv/` gitignore pattern. §5 above reflects the current, correct instructions.
 - **No per-package READMEs beyond a short pointer**: the repo's existing convention (checked before scaffolding) is a single root `README.md` (framework-level) with no per-package READMEs. `backend/README.md` and `frontend/README.md` were kept minimal (pointer to this file) rather than duplicating install instructions, so `setup.md` remains the single source of truth per `aamad-core.md` "Reproducibility and provenance."
 - Dependencies were **declared, not installed**, in this action (see §2) — `*install-dependencies` was not invoked this run.
 
 ## Open Questions
 
 - Carried from `sad.md` (unresolved, not this persona's to resolve): actual project budget; which PII regulation (if any) must ultimately be complied with; MVP hosting/infrastructure target (`@devops.eng`, Phase 3).
-- Whether `@backend.eng` wants the backend `.venv` to remain the shared root `.venv` or split into its own once `crewai`'s dependency footprint is known (e.g., if it pulls in a large/conflicting transitive dependency tree) — flagged here for `@backend.eng` to confirm or revisit during `*develop-be`.
+- ~~Whether `@backend.eng` wants the backend `.venv` to remain the shared root `.venv` or split into its own once `crewai`'s dependency footprint is known~~ — **Resolved 2026-08-19**: split into `backend/.venv` (Python 3.11.16), forced by `crewai`'s `<3.14` requirement conflicting with the root `.venv`'s 3.14.5. See Assumptions and §5 above; also documented in `project-context/2.build/backend.md`.
 - Exact FastAPI/uvicorn `--app-dir` / entrypoint convention (`app.main:app` under `src/`) is a scaffold-time default; `@backend.eng` may prefer a different `src`-layout invocation (e.g., via an installed console-script) once the app grows — not fixed by SAD.
 
 ## Audit
@@ -173,3 +175,6 @@ Both servers run independently for now — no proxy/integration wiring exists ye
 - **Inputs used**: `project-context/1.define/prd.md`, `project-context/1.define/sad.md`, `aamad.config.yml`, `.claude/rules/aamad-core.md`, `.claude/rules/adapter-crewai.md`, `.claude/rules/delivery-workflow.md`, `.claude/rules/epics-index.md`, `.claude/agents/project-mgr.md`
 - **Tools/versions used**: Python 3.14.5, pip 26.1.1, Node v24.16.0, npm 11.13.0, `npm create vite@latest` (`create-vite@9.1.2`, `react-ts` template), `react-router-dom@^7`. No LLM/model calls were made by this scaffolding action (deterministic file/tool operations only) — Prompt Trace omitted per `aamad-core.md` ("if omitted, the Audit must state why"): this action performed no generative/LLM-backed work, only file scaffolding and CLI tool invocations.
 - **Prohibited actions confirmed avoided**: no CrewAI agent/task logic written (YAML stubs only), no FastAPI route logic beyond `GET /health`, no UI components beyond literal "coming soon" placeholders, no dependency installation performed (declared only).
+- **Timestamp**: 2026-08-19
+- **Persona**: `project-mgr`
+- **Action**: `setup-project` (follow-up correction: §5 install/run instructions and the "Single Python environment" Assumption updated to reflect `@backend.eng`'s `*develop-be` resolution — `backend/.venv` on Python 3.11.16, not the root `.venv`, because `crewai` requires Python `<3.14` and the root `.venv` runs 3.14.5; Open Question resolved accordingly. Also added `.vscode/settings.json` to default the workspace Python interpreter to `backend/.venv` so local tooling picks up the correct environment without manual activation.)

@@ -1,0 +1,142 @@
+"""Domain configuration loader + ADR-005 keyword/section-scored kb_search.
+
+sad.md §2 ADR-005 (verbatim algorithm):
+    1. Filter domain_config.json's knowledge_base array to entries where
+       entry.intent == intent (the ClassificationResult.intent).
+    2. Score each surviving entry by keyword overlap:
+       relevance_score = |keywords(query) ∩ entry.keywords| / |entry.keywords|
+    3. Floor: drop entries scoring below 0.20.
+    4. Return the top 3 surviving entries as retrieved_snippets;
+       match_found = true iff at least one entry cleared the floor.
+
+Implementation note (recorded in backend.md Assumptions): the SAD defines
+the score via `keywords(query) ∩ entry.keywords` but does not separately
+specify a query-side keyword-extraction algorithm. This module interprets
+`keywords(query) ∩ entry.keywords` as "the subset of entry.keywords that
+appear as a case-insensitive substring of the raw query text" — this keeps
+the algorithm fully deterministic/local (no NLP dependency) and matches
+ADR-005's "fully explainable... every relevance_score traces to specific
+overlapping words" rationale.
+
+No hotel-specific strings/logic live in this module (AC-009) — everything
+domain-specific is read from domain_config.json.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from functools import lru_cache
+from pathlib import Path
+
+import jsonschema
+from pydantic import BaseModel, Field
+
+from app.schemas.task_outputs import KBRetrievalResult, KBSnippet
+
+RELEVANCE_FLOOR = 0.20
+TOP_N = 3
+
+# backend/src/app/domain/loader.py -> backend/
+_BACKEND_ROOT = Path(__file__).resolve().parents[3]
+_DEFAULT_CONFIG_PATH = _BACKEND_ROOT / "domain_config.json"
+_DEFAULT_SCHEMA_PATH = _BACKEND_ROOT / "domain_config.schema.json"
+
+
+class TaxonomyEntry(BaseModel):
+    intent: str
+    label: str
+    keywords: list[str] = Field(default_factory=list)
+
+
+class KBEntry(BaseModel):
+    kb_entry_id: str
+    intent: str
+    section: str
+    keywords: list[str] = Field(default_factory=list)
+    content: str
+
+
+class DomainConfig(BaseModel):
+    domain: str
+    version: str
+    description: str | None = None
+    taxonomy: list[TaxonomyEntry]
+    knowledge_base: list[KBEntry]
+    prompts: dict = Field(default_factory=dict)
+
+
+def load_domain_config(
+    config_path: str | os.PathLike[str] | None = None,
+    schema_path: str | os.PathLike[str] | None = None,
+) -> DomainConfig:
+    """Load + schema-validate domain_config.json (FR-012/FR-013, PRD "JSON,
+    schema-validated"). Raises jsonschema.ValidationError on a malformed
+    config rather than silently proceeding — fail-closed per aamad-core.md.
+    """
+    config_path = Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
+    schema_path = Path(schema_path) if schema_path else _DEFAULT_SCHEMA_PATH
+
+    with open(config_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    with open(schema_path, encoding="utf-8") as f:
+        schema = json.load(f)
+
+    jsonschema.validate(instance=raw, schema=schema)
+    return DomainConfig.model_validate(raw)
+
+
+@lru_cache(maxsize=1)
+def get_domain_config() -> DomainConfig:
+    """Process-wide singleton, loaded once at start (sad.md §4 Runtime
+    Integration Layer: "domain_config.json loaded once at start and
+    hot-swappable only by restart for MVP")."""
+    return load_domain_config()
+
+
+def kb_search(intent: str, query_text: str, config: DomainConfig | None = None) -> KBRetrievalResult:
+    """ADR-005 keyword/section-scored retrieval. Pure function — no network,
+    no embeddings, no external call."""
+    config = config or get_domain_config()
+    query_lower = query_text.lower()
+
+    scored: list[KBSnippet] = []
+    for entry in config.knowledge_base:
+        if entry.intent != intent or not entry.keywords:
+            continue
+        matched = [kw for kw in entry.keywords if kw.lower() in query_lower]
+        relevance_score = len(matched) / len(entry.keywords)
+        if relevance_score < RELEVANCE_FLOOR:
+            continue
+        scored.append(
+            KBSnippet(
+                kb_entry_id=entry.kb_entry_id,
+                content=entry.content,
+                relevance_score=round(relevance_score, 4),
+            )
+        )
+
+    scored.sort(key=lambda s: s.relevance_score, reverse=True)
+    top = scored[:TOP_N]
+    return KBRetrievalResult(retrieved_snippets=top, match_found=len(top) > 0)
+
+
+def validate_config_file(
+    config_path: str | os.PathLike[str] | None = None,
+    schema_path: str | os.PathLike[str] | None = None,
+) -> list[str]:
+    """Returns a list of human-readable validation errors (empty = valid).
+    Used by unit tests and can be reused by a future CLI/CI check."""
+    config_path = Path(config_path) if config_path else _DEFAULT_CONFIG_PATH
+    schema_path = Path(schema_path) if schema_path else _DEFAULT_SCHEMA_PATH
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        with open(schema_path, encoding="utf-8") as f:
+            schema = json.load(f)
+        jsonschema.validate(instance=raw, schema=schema)
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"Could not read/parse config or schema: {exc}"]
+    except jsonschema.ValidationError as exc:
+        return [str(exc)]
+    return []
