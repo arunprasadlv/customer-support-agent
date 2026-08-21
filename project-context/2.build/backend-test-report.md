@@ -1,10 +1,10 @@
 # Backend Test Report
 
 **Run date**: 2026-08-21
-**Scope**: Phase 1 + Phase 2 (SAD "MVP Build Sequencing")
+**Scope**: Phase 1 + Phase 2 + Phase 3 (SAD "MVP Build Sequencing" — all three phases complete)
 **Suite**: `pytest` via `backend/.venv` (Python 3.11.16)
-**Duration**: 88.6s
-**Result**: **56 / 56 passed**, 0 failed, 0 skipped
+**Duration**: 89.6s
+**Result**: **75 / 75 passed**, 0 failed, 0 skipped
 
 Regenerate with:
 
@@ -19,9 +19,9 @@ cd backend
 
 | Check | Result |
 |---|---|
-| pytest | 56 passed, 0 failed, 0 skipped |
-| ruff | 2 pre-existing nits, 0 new (see Known Issues) |
-| mypy | clean — 18 source files, 0 issues |
+| pytest | 75 passed, 0 failed, 0 skipped |
+| ruff | 1 pre-existing nit, 0 new (see Known Issues) |
+| mypy | clean — 19 source files, 0 issues |
 
 ## Integration tests — `tests/integration/`
 
@@ -60,6 +60,19 @@ cd backend
 - `test_resolve_escalation_returns_queued_status_and_review_queue_id`
 - `test_resolve_escalation_missing_resolution_text_returns_422`
 - `test_resolve_escalation_unknown_id_returns_404_error_envelope`
+
+### `test_review_queue_endpoints.py` (11 passed)
+- `test_get_review_queue_empty_list_when_no_entries`
+- `test_get_review_queue_lists_entries_most_recent_first`
+- `test_approve_writes_live_kb_entry_and_marks_status_approved`
+- `test_approve_optional_edit_overrides_all_fields`
+- `test_approve_unknown_id_returns_404`
+- `test_reapprove_already_approved_entry_returns_409`
+- `test_approve_missing_intent_with_no_override_returns_422`
+- `test_reject_marks_status_rejected_with_no_kb_write`
+- `test_reject_unknown_id_returns_404`
+- `test_rereject_already_rejected_entry_returns_409`
+- `test_get_review_queue_shows_mixed_statuses`
 
 ## Unit tests — `tests/unit/`
 
@@ -103,15 +116,27 @@ cd backend
 - `test_duplicate_id_is_ignored_not_duplicated`
 - `test_multiple_records_ordered_most_recent_first`
 
+### `test_knowledge_base.py` (8 passed)
+- `test_init_db_creates_file`
+- `test_count_entries_zero_on_fresh_db`
+- `test_seed_from_domain_config_populates_table`
+- `test_seed_from_domain_config_is_idempotent`
+- `test_insert_kb_entry_adds_a_new_row`
+- `test_list_kb_entries_filters_by_intent`
+- `test_kb_search_finds_a_manually_inserted_live_entry`
+- `test_kb_search_still_finds_seeded_entries_when_table_is_fresh`
+
 ## Known issues / notes
 
-1. **Two pre-existing ruff line-length nits, not regressions.** `src/app/domain/loader.py:97` and `src/app/schemas/task_outputs.py:44` exceed the 100-char limit by 1-2 characters. Present since the original `*develop-be` run; untouched by any follow-up fix.
+1. **One pre-existing ruff line-length nit, not a regression.** `src/app/schemas/task_outputs.py:44` exceeds the 100-char limit by 2 characters. Present since the original `*develop-be` run. (The other previously-flagged nit, `domain/loader.py:97`, was resolved as a side effect of Phase 3's edits to that file.)
 
-2. **Exit-time traceback noise after the summary line — not a test failure.** A straggler background thread from an earlier timed-out inquiry occasionally finishes its real Anthropic call after pytest's own process teardown, producing `cannot schedule new futures after shutdown` tracebacks *after* `56 passed` is already reported. This is a documented consequence of Python's inability to forcibly kill a running thread (see `backend.md`) — harmless, but alarming if you don't know to expect it.
+2. **Exit-time traceback noise after the summary line — not a test failure.** A straggler background thread from an earlier timed-out inquiry occasionally finishes its real Anthropic call after pytest's own process teardown, producing `cannot schedule new futures after shutdown` tracebacks *after* `75 passed` is already reported. This is a documented consequence of Python's inability to forcibly kill a running thread (see `backend.md`) — harmless, but alarming if you don't know to expect it. On rare occasions this same mechanism has caused one cross-test flake in `test_run_inquiry_degrades_to_escalate_on_timeout` (passes in isolation) — not observed in this run (75/75 clean).
 
-3. **Live reasoning-Crew latency still exceeds the SAD §7 ceiling (open).** Real end-to-end runs against the Anthropic API take ~15-16s, above the `sad.md` §7 10-second hard ceiling. Phase 2 was deliberately built without first running the mandatory latency-spike/fallback-ladder gate (operator decision, 2026-08-21) — escalate-on-timeout remains the common case for live traffic on both `/chat` and `/email`, not the exception. Still an open decision.
+3. **Live reasoning-Crew latency still exceeds the SAD §7 ceiling (open).** Real end-to-end runs against the Anthropic API take ~15-16s, above the `sad.md` §7 10-second hard ceiling. Phases 2 and 3 were both built without first running the mandatory latency-spike/fallback-ladder gate (operator decision, 2026-08-21) — escalate-on-timeout remains the common case for live traffic across `/chat` and `/email`, not the exception. Still an open decision.
 
-4. **`POST /escalations/{id}/resolve` doesn't validate prior escalation (open).** It accepts any valid interaction `id`, including ones whose `outcome` was `"responded"`, not `"escalated"` — no check enforces that the target interaction was actually escalated before a resolution can be queued. Deliberately left unenforced this round; see `backend.md` Open Questions.
+4. **`POST /escalations/{id}/resolve` doesn't validate prior escalation (open).** It accepts any valid interaction `id`, including ones whose `outcome` was `"responded"`, not `"escalated"` — no check enforces that the target interaction was actually escalated before a resolution can be queued. Deliberately left unenforced; see `backend.md` Open Questions.
+
+5. **Re-approving/re-rejecting an already-actioned review-queue entry returns 409.** A deliberate design choice, not a bug — `approve` has a one-shot live-KB write side effect, so silently succeeding on a repeat call could double-write or mask a stale client state. Confirmed via `test_reapprove_already_approved_entry_returns_409` / `test_rereject_already_rejected_entry_returns_409`.
 
 ## Environment
 
@@ -124,6 +149,6 @@ cd backend
 
 ## Sources
 
-- `project-context/1.define/sad.md` (acceptance criteria, MVP Build Sequencing)
+- `project-context/1.define/sad.md` (acceptance criteria, MVP Build Sequencing — all 3 phases now complete)
 - `project-context/2.build/backend.md` (full build history, design decisions, Audit trail)
 - Live `pytest`/`ruff`/`mypy` run, 2026-08-21, on branch `backend`

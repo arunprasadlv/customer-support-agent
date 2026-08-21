@@ -124,10 +124,10 @@ def record_review_queue_entry(
 
 
 def list_review_queue(db_path: str | os.PathLike[str] | None = None) -> list[dict[str, Any]]:
-    """Return all queued candidate entries, most recent first. Not exposed
-    via any endpoint in this phase (no `GET /review-queue` yet — Phase 3);
-    exists for tests and as the read path Phase 3 will build its endpoint
-    on top of directly."""
+    """Return all queued candidate entries (pending + approved + rejected),
+    most recent first. Backs `GET /review-queue` (Phase 3, `app.main`) —
+    sad.md doesn't specify a status filter for this endpoint, so none is
+    applied here."""
     with _connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -139,3 +139,38 @@ def list_review_queue(db_path: str | os.PathLike[str] | None = None) -> list[dic
             d["candidate_keywords"] = json.loads(d["candidate_keywords"])
             result.append(d)
         return result
+
+
+def get_review_queue_entry(
+    id: str, db_path: str | os.PathLike[str] | None = None
+) -> dict[str, Any] | None:
+    """Return one review-queue record by `id`, or `None` if not found.
+
+    Added for Phase 3: `POST /review-queue/{id}/approve` and `POST
+    /review-queue/{id}/reject` (`app.main`) use this to validate `{id}`
+    before acting — a clean 404 when it doesn't exist, per this phase's
+    task instructions.
+    """
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM review_queue WHERE id = ?", (id,)).fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        d["candidate_keywords"] = json.loads(d["candidate_keywords"])
+        return d
+
+
+def update_review_queue_status(
+    id: str, status: str, db_path: str | os.PathLike[str] | None = None
+) -> None:
+    """Set a review-queue record's `status` (`'approved'` | `'rejected'`).
+
+    Added for Phase 3. Does not itself validate that `id` exists or that
+    `status` is a recognized value — callers (`app.main`'s approve/reject
+    routes) already call `get_review_queue_entry` first to return a clean
+    404, and are the only production callers, so no extra guard is
+    duplicated here.
+    """
+    with _connect(db_path) as conn:
+        conn.execute("UPDATE review_queue SET status = ? WHERE id = ?", (status, id))

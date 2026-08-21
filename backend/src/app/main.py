@@ -26,16 +26,23 @@ the `{from, subject, body}` -> `raw_text`/`sender_id` mapping and the
 `{id}` -> `original_inquiry_id` mapping, both `@backend.eng` judgment
 calls documented there.
 
-The rest of the API contract (`GET /review-queue`, `POST
-/review-queue/{id}/approve`, `POST /review-queue/{id}/reject` — the sole
-KB-write path, NFR-008) remains explicitly out of scope (sad.md §4, Phase
-3 of MVP Build Sequencing) — do not add route logic for those here.
+`*develop-be`/`*implement-endpoint` Phase 3 (2026-08-21) adds `GET
+/review-queue`, `POST /review-queue/{id}/approve`, and `POST
+/review-queue/{id}/reject` — sad.md §2's "Third, fully separate write
+path", the *sole* path that can mutate the live KB (NFR-008, FR-014,
+AC-011). Approve writes the (optionally Reviewer-edited) candidate to the
+new live `knowledge_base` table (`app.persistence.knowledge_base`) and
+marks the queue row `status='approved'`; reject marks it `status='rejected'`
+with no KB write. See backend.md's Phase 3 section for the re-approve/
+re-reject idempotency choice (409, not silently accepted) and the
+optional-edit request shape.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import uuid
 from typing import Any
 
 from dotenv import load_dotenv
@@ -55,6 +62,12 @@ from app.flows.escalation_resolution_flow import (  # noqa: E402
 )
 from app.flows.inquiry_flow import run_inquiry  # noqa: E402
 from app.persistence.interaction_log import list_interactions  # noqa: E402
+from app.persistence.knowledge_base import insert_kb_entry  # noqa: E402
+from app.persistence.review_queue import (  # noqa: E402
+    get_review_queue_entry,
+    list_review_queue,
+    update_review_queue_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -316,3 +329,200 @@ def get_interactions() -> list[InteractionRecord]:
     for row in rows:
         row["redaction_actions"] = json.loads(row["redaction_actions"])
     return [InteractionRecord(**row) for row in rows]
+
+
+class ReviewQueueItem(BaseModel):
+    """sad.md §4: `GET /review-queue` response item — one row per queued
+    candidate KB entry (`EscalationResolutionFlow`'s write, sad.md §2 /
+    FR-008/AC-010), field set mirrors `review_queue.py`'s schema exactly."""
+
+    id: str
+    created_at: str
+    original_inquiry_id: str
+    original_query_text: str | None = None
+    resolution_text: str
+    candidate_intent: str | None = None
+    candidate_section: str | None = None
+    candidate_keywords: list[str] = []
+    candidate_content: str
+    status: str
+
+
+class ReviewQueueNotFoundError(RuntimeError):
+    """Raised when `{id}` in `POST /review-queue/{id}/approve` or `.../reject`
+    doesn't match any persisted `review_queue` record. Mapped to 404 by
+    `review_queue_not_found_handler` below, same `{error_code, message}`
+    envelope convention as `EscalationNotFoundError`."""
+
+
+@app.exception_handler(ReviewQueueNotFoundError)
+def review_queue_not_found_handler(
+    request: Request, exc: ReviewQueueNotFoundError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"error_code": "review_queue_entry_not_found", "message": str(exc)},
+    )
+
+
+class ReviewQueueConflictError(RuntimeError):
+    """Raised when approve/reject is called against a `review_queue` row
+    that has already been actioned (`status != 'pending'`). A `@backend.eng`
+    judgment call (sad.md leaves this open) — re-approving/re-rejecting is
+    treated as a 409 Conflict, not a silent no-op, because approve has a
+    real side effect (a live-KB write) that must not be repeatable/
+    ambiguous: idempotent-safe re-approval would either silently write a
+    second KB entry for the same candidate or require yet another dedup
+    key, and NFR-008's "no path to the live KB except explicit human
+    approval" reads more safely as "each approval decision happens exactly
+    once" than as "approving twice is harmless." See backend.md
+    Assumptions."""
+
+
+@app.exception_handler(ReviewQueueConflictError)
+def review_queue_conflict_handler(request: Request, exc: ReviewQueueConflictError) -> JSONResponse:
+    return JSONResponse(
+        status_code=409,
+        content={"error_code": "review_queue_already_actioned", "message": str(exc)},
+    )
+
+
+class InvalidApprovalError(RuntimeError):
+    """Raised when the fields that would form the new KB entry (after
+    applying any Reviewer overrides on top of the queued candidate's stored
+    values) are missing a required piece — specifically `intent`/`content`
+    empty or absent. Mapped to 422, same envelope convention."""
+
+
+@app.exception_handler(InvalidApprovalError)
+def invalid_approval_handler(request: Request, exc: InvalidApprovalError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={"error_code": "invalid_kb_entry", "message": str(exc)},
+    )
+
+
+@app.get("/review-queue", response_model=list[ReviewQueueItem])
+def get_review_queue() -> list[ReviewQueueItem]:
+    """sad.md §4: `GET /review-queue` — list all queued candidate entries
+    (pending + approved + rejected), most recent first. sad.md doesn't
+    specify a status filter for this endpoint, so none is invented here —
+    the `/ops` view (sad.md §3) is expected to filter/group client-side if
+    it wants to. Delegates directly to
+    `app.persistence.review_queue.list_review_queue()`.
+    """
+    rows = list_review_queue()
+    return [ReviewQueueItem(**row) for row in rows]
+
+
+class ApproveReviewQueueRequest(BaseModel):
+    """`POST /review-queue/{id}/approve` request body — sad.md §2 step 2:
+    "Approve (optionally edited) -> entry written to live KB". All fields
+    are optional overrides; any field left unset falls back to the queued
+    candidate's stored `candidate_*` value. `keywords` in particular
+    matters in practice: `EscalationResolutionFlow` always writes
+    `candidate_keywords=[]` (Phase 2 deliberately left keyword-filling for
+    the Reviewer at approval time, per that flow's own docstring) — ADR-005's
+    keyword-overlap scoring means an entry approved with empty keywords can
+    never actually be retrieved (a 0-length `entry.keywords` list is
+    skipped by `kb_search` outright), so a real Reviewer supplying keywords
+    here is how this candidate becomes retrievable at all, not just a nice-
+    to-have edit."""
+
+    intent: str | None = None
+    section: str | None = None
+    keywords: list[str] | None = None
+    content: str | None = None
+
+
+class KBEntryResponse(BaseModel):
+    """The resulting live KB entry, mirrors `domain/loader.py::KBEntry`'s
+    shape exactly (same 5 fields ADR-005 pins)."""
+
+    kb_entry_id: str
+    intent: str
+    section: str
+    keywords: list[str]
+    content: str
+
+
+@app.post("/review-queue/{id}/approve", response_model=KBEntryResponse)
+def approve_review_queue_entry(id: str, request: ApproveReviewQueueRequest) -> KBEntryResponse:
+    """sad.md §2 step 2: "Approve (optionally edited) -> entry written to
+    live KB, retrievable by knowledge_retriever from that point on (FR-014,
+    AC-011)." The only route in the system that writes to
+    `app.persistence.knowledge_base` (NFR-008).
+
+    404 (`review_queue_entry_not_found`) if `{id}` doesn't exist. 409
+    (`review_queue_already_actioned`) if the row isn't `status='pending'`
+    (see `ReviewQueueConflictError`). 422 (`invalid_kb_entry`) if the
+    resulting entry would have an empty `intent`/`content` even after
+    applying overrides (e.g. the queued candidate's `candidate_intent` was
+    never populated and the Reviewer didn't supply one either).
+    """
+    row = get_review_queue_entry(id)
+    if row is None:
+        raise ReviewQueueNotFoundError(f"No review_queue record found for id={id!r}")
+    if row["status"] != "pending":
+        raise ReviewQueueConflictError(
+            f"review_queue entry id={id!r} has already been actioned "
+            f"(status={row['status']!r}); re-approval is not permitted"
+        )
+
+    intent = request.intent if request.intent is not None else row["candidate_intent"]
+    section = request.section if request.section is not None else row["candidate_section"]
+    keywords = request.keywords if request.keywords is not None else row["candidate_keywords"]
+    content = request.content if request.content is not None else row["candidate_content"]
+
+    if not intent or not content:
+        raise InvalidApprovalError(
+            "Cannot approve: the resulting KB entry needs a non-empty 'intent' and "
+            "'content' — the queued candidate is missing one and no override was "
+            "supplied in the request body."
+        )
+
+    kb_entry_id = f"kb-approved-{uuid.uuid4().hex[:12]}"
+    final_section = section or "operator_resolution"
+    final_keywords = keywords or []
+    entry: dict[str, Any] = {
+        "kb_entry_id": kb_entry_id,
+        "intent": intent,
+        "section": final_section,
+        "keywords": final_keywords,
+        "content": content,
+    }
+    insert_kb_entry(entry)
+    update_review_queue_status(id, "approved")
+
+    return KBEntryResponse(
+        kb_entry_id=kb_entry_id,
+        intent=intent,
+        section=final_section,
+        keywords=final_keywords,
+        content=content,
+    )
+
+
+class RejectReviewQueueResponse(BaseModel):
+    """`POST /review-queue/{id}/reject` response schema."""
+
+    id: str
+    status: str
+
+
+@app.post("/review-queue/{id}/reject", response_model=RejectReviewQueueResponse)
+def reject_review_queue_entry(id: str) -> RejectReviewQueueResponse:
+    """sad.md §2 step 3: "Reject -> entry discarded, KB unchanged." No
+    request body — a rejection carries no editable content. Same 404/409
+    handling as approve (see `approve_review_queue_entry`)."""
+    row = get_review_queue_entry(id)
+    if row is None:
+        raise ReviewQueueNotFoundError(f"No review_queue record found for id={id!r}")
+    if row["status"] != "pending":
+        raise ReviewQueueConflictError(
+            f"review_queue entry id={id!r} has already been actioned "
+            f"(status={row['status']!r}); re-rejection is not permitted"
+        )
+
+    update_review_queue_status(id, "rejected")
+    return RejectReviewQueueResponse(id=id, status="rejected")

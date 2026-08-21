@@ -20,6 +20,18 @@ overlapping words" rationale.
 
 No hotel-specific strings/logic live in this module (AC-009) — everything
 domain-specific is read from domain_config.json.
+
+Phase 3 update (sad.md §4 Data Architecture: KB content is "seeded from
+domain_config.json, then mutable only via approved review-queue writes"):
+`kb_search`'s entry data source is now the live, mutable `knowledge_base`
+table (`app.persistence.knowledge_base`) instead of `config.knowledge_base`
+directly — the scoring/floor/top-3 algorithm below is unchanged. The live
+table is seeded once (self-healing/idempotent — see
+`persistence/knowledge_base.py`'s module docstring for the exact trigger)
+from this same `DomainConfig.knowledge_base`, then grows only via
+`POST /review-queue/{id}/approve` (`app.main`), never here. `taxonomy`
+remains untouched — still read directly off the static `DomainConfig`
+singleton, no live/mutable store for it in MVP.
 """
 
 from __future__ import annotations
@@ -32,6 +44,9 @@ from pathlib import Path
 import jsonschema
 from pydantic import BaseModel, Field
 
+from app.persistence.knowledge_base import count_entries as _kb_count_entries
+from app.persistence.knowledge_base import list_kb_entries as _list_kb_entries
+from app.persistence.knowledge_base import seed_from_domain_config as _seed_kb_from_domain_config
 from app.schemas.task_outputs import KBRetrievalResult, KBSnippet
 
 RELEVANCE_FLOOR = 0.20
@@ -94,24 +109,42 @@ def get_domain_config() -> DomainConfig:
     return load_domain_config()
 
 
-def kb_search(intent: str, query_text: str, config: DomainConfig | None = None) -> KBRetrievalResult:
-    """ADR-005 keyword/section-scored retrieval. Pure function — no network,
-    no embeddings, no external call."""
+def kb_search(
+    intent: str, query_text: str, config: DomainConfig | None = None
+) -> KBRetrievalResult:
+    """ADR-005 keyword/section-scored retrieval. Pure function apart from
+    the live-KB read (Phase 3, see module docstring) — no network, no
+    embeddings, no external call.
+
+    `config` is still accepted (and still used to seed the live table when
+    it's empty) for signature stability and because it's how the seed data
+    itself is sourced; entries are otherwise read from the live
+    `knowledge_base` table (`app.persistence.knowledge_base`), not from
+    `config.knowledge_base` directly.
+    """
     config = config or get_domain_config()
+
+    # Seeding trigger (see persistence/knowledge_base.py's module docstring
+    # for the full rationale): cheap no-op once the table has any rows;
+    # self-healing on a fresh/empty (e.g. test-isolated) table.
+    if _kb_count_entries() == 0:
+        _seed_kb_from_domain_config(config.knowledge_base)
+
     query_lower = query_text.lower()
 
     scored: list[KBSnippet] = []
-    for entry in config.knowledge_base:
-        if entry.intent != intent or not entry.keywords:
+    for entry in _list_kb_entries(intent=intent):
+        keywords = entry.get("keywords") or []
+        if not keywords:
             continue
-        matched = [kw for kw in entry.keywords if kw.lower() in query_lower]
-        relevance_score = len(matched) / len(entry.keywords)
+        matched = [kw for kw in keywords if kw.lower() in query_lower]
+        relevance_score = len(matched) / len(keywords)
         if relevance_score < RELEVANCE_FLOOR:
             continue
         scored.append(
             KBSnippet(
-                kb_entry_id=entry.kb_entry_id,
-                content=entry.content,
+                kb_entry_id=entry["kb_entry_id"],
+                content=entry["content"],
                 relevance_score=round(relevance_score, 4),
             )
         )
