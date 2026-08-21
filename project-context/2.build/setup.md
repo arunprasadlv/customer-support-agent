@@ -119,6 +119,37 @@ uvicorn app.main:app --reload --port 8000 --app-dir src
 # Health check: curl http://localhost:8000/health -> {"status":"ok"}
 ```
 
+**Manually exercising the API** (once the server above is running — a real `ANTHROPIC_API_KEY` in `backend/.env` is required for `/chat`, since it invokes the live 5-agent reasoning Crew; `/health` and an empty `/interactions` don't need one):
+
+```bash
+# Liveness check
+curl http://localhost:8000/health
+# -> {"status":"ok"}
+
+# Send a chat inquiry (channel=chat, per sad.md SS4 POST /chat contract).
+# Real LLM calls across 5 agents take ~15-20s — this is expected, not a hang.
+# Try messages matching the 4 seeded scenario categories in domain_config.json:
+# reservations_booking, checkin_checkout_billing, room_service_amenities, general_complaints.
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Can I get extra towels sent to my room?", "session_id": "manual-test-1"}'
+# -> {"reply": "...", "escalated": false}   (or escalated: true if grounded==false /
+#     confidence<=0.70 / sentiment_score>=0.75 / the 10s SAD SS7 ceiling was hit)
+
+# Validation error case — omit a required field to confirm a clean 422, not a 500:
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "manual-test-1"}'
+# -> 422 with a Pydantic field-error body
+
+# View the interaction log (GET /interactions — deliberately pulled forward from
+# SAD's Phase 3 sequencing into Phase 1 per operator decision; see backend.md SS12).
+# Should show one record per /chat call above, most recent first.
+curl http://localhost:8000/interactions
+```
+
+FastAPI's interactive docs (Swagger UI) are also available at `http://localhost:8000/docs` while the server is running, if you'd rather test through a browser form than `curl`.
+
 Run tests/lint/type-check once dependencies are installed (from `backend/`, with `.venv` activated, or via the venv's interpreter directly — `./.venv/Scripts/python.exe -m pytest` etc. — if not activated):
 
 ```bash
