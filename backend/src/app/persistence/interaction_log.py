@@ -125,6 +125,26 @@ def record_interaction(
         )
 
 
+def get_interaction_by_id(
+    inquiry_id: str, db_path: str | os.PathLike[str] | None = None
+) -> dict[str, Any] | None:
+    """Return one interaction-log record by `id` (the same id `InquiryFlow`
+    persists per inquiry, sad.md §2 step 6), or `None` if not found.
+
+    Added for Phase 2 of sad.md's "MVP Build Sequencing":
+    `EscalationResolutionFlow` (`flows/escalation_resolution_flow.py`) uses
+    this to link a review-queue candidate entry back to its original query
+    (FR-008, AC-010), and `POST /escalations/{id}/resolve` uses it to
+    validate the path `id` before triggering that flow.
+    """
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM interaction_log WHERE id = ?", (inquiry_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def list_interactions(db_path: str | os.PathLike[str] | None = None) -> list[dict[str, Any]]:
     """Return all persisted interaction-log records, most recent first.
     Used by tests and by `GET /interactions` (`app.main`) — a deliberate

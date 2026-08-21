@@ -5,7 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.persistence.interaction_log import init_db, list_interactions, record_interaction
+from app.persistence.interaction_log import (
+    get_interaction_by_id,
+    init_db,
+    list_interactions,
+    record_interaction,
+)
 
 
 def test_init_db_creates_file(tmp_path: Path) -> None:
@@ -62,6 +67,44 @@ def test_record_diagnostic_halt_without_optional_fields(tmp_path: Path) -> None:
     assert rows[0]["outcome"] == "diagnostic_halt"
     assert rows[0]["intent"] is None
     assert rows[0]["diagnostic"] == "pii_guard failure: boom"
+
+
+def test_get_interaction_by_id_found(tmp_path: Path) -> None:
+    """Phase 2: EscalationResolutionFlow / POST /escalations/{id}/resolve
+    use this to link a review-queue candidate entry back to its original
+    query (FR-008, AC-010)."""
+    db_path = tmp_path / "test.db"
+    record_interaction(
+        {
+            "id": "abc-123",
+            "created_at": "2026-08-19T00:00:00+00:00",
+            "channel": "chat",
+            "sender_id": "guest-1",
+            "query_text": "The room was dirty and I'm very unhappy.",
+            "intent": "general_complaints",
+            "confidence": 0.6,
+            "sentiment_score": 0.8,
+            "sentiment_label": "angry",
+            "match_found": False,
+            "grounded": False,
+            "response_text": None,
+            "outcome": "escalated",
+            "redaction_actions": [],
+        },
+        db_path=db_path,
+    )
+
+    found = get_interaction_by_id("abc-123", db_path=db_path)
+    assert found is not None
+    assert found["id"] == "abc-123"
+    assert found["intent"] == "general_complaints"
+    assert found["outcome"] == "escalated"
+
+
+def test_get_interaction_by_id_not_found(tmp_path: Path) -> None:
+    db_path = tmp_path / "test.db"
+    init_db(db_path)
+    assert get_interaction_by_id("does-not-exist", db_path=db_path) is None
 
 
 def test_multiple_records_ordered_most_recent_first(tmp_path: Path) -> None:

@@ -146,6 +146,30 @@ curl -X POST http://localhost:8000/chat \
 # SAD's Phase 3 sequencing into Phase 1 per operator decision; see backend.md SS12).
 # Should show one record per /chat call above, most recent first.
 curl http://localhost:8000/interactions
+
+# --- Phase 2 (2026-08-21): email channel + escalation resolution ---
+
+# Send an email inquiry (channel=email, per sad.md SS4 POST /email contract).
+# Same InquiryFlow/reasoning-Crew pipeline as /chat, ~15-20s for a real response.
+curl -X POST http://localhost:8000/email \
+  -H "Content-Type: application/json" \
+  -d '{"from": "guest@example.com", "subject": "Billing question", "body": "My folio shows an extra charge I do not recognize."}'
+# -> {"reply_body": "...", "escalated": false}  (same escalation rules as /chat)
+
+# To exercise the resolve path, first get an escalated interaction's id from
+# GET /interactions (look for "outcome": "escalated"), then:
+curl -X POST http://localhost:8000/escalations/<id>/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"resolution_text": "Manually waived the duplicate charge and confirmed with the guest."}'
+# -> {"status": "queued", "review_queue_id": "..."}
+# Writes a candidate KB entry to the review_queue table (backend/data/app.db) —
+# does NOT touch the live KB; that write path is Phase 3, not yet built.
+
+# Unknown id -> clean 404, not a 500:
+curl -X POST http://localhost:8000/escalations/does-not-exist/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"resolution_text": "test"}'
+# -> 404 {"error_code": "original_inquiry_not_found", "message": "..."}
 ```
 
 FastAPI's interactive docs (Swagger UI) are also available at `http://localhost:8000/docs` while the server is running, if you'd rather test through a browser form than `curl`.
