@@ -1,0 +1,229 @@
+/* /inbox route styles (aamad.config.yml ui.visual_style: minimal — plain
+   CSS, no component library/Tailwind, matches sad.md SS3). Scoped to
+   the inbox surface only; imported by routes/Inbox.tsx.
+
+   Color tokens are deliberately reused from chat.css's already-verified
+   set rather than inventing new ones (see frontend.md for this action's
+   accessibility notes):
+     - #b45f18 border / #fff4e5 background / #6b3d00 text — escalation
+       (verified ~4.2:1 border-vs-bg in the /chat remediation pass).
+     - #6b7280 form-field borders (verified ~4.6:1, reused here against
+       an even lighter #fff background, so still compliant).
+     - #2563eb / #ffffff — primary button (same pairing as /chat's Send
+       button; frontend.md's /chat table established ~5.16:1 for
+       white-on-#2563eb text at a comparable weight/size).
+     - #d0d0d0 card/container borders — reused from /chat's
+       .chat-window / .chat-input top border, which were not flagged in
+       the /chat remediation pass. These are decorative panel/card
+       boundaries, not form controls or other "UI components" in the
+       WCAG 1.4.3/1.4.11 sense, so no new ratio was computed for them.
+   No color-only distinction is used between sent/reply/escalation
+   entries: each is also labeled with real text ("Sent"/"Reply"/the
+   escalation header) and sent/reply additionally differ by alignment. */
+
+.inbox-page {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.inbox-page__subtitle {
+  color: #555;
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+}
+
+.inbox-window {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  min-height: 420px;
+  overflow: hidden;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.email-thread {
+  flex: 1;
+  overflow-y: auto;
+  max-height: 50vh;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.email-thread__empty {
+  color: #555;
+  font-style: italic;
+  margin: 0;
+}
+
+.email-item {
+  max-width: 85%;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 0.65rem 0.9rem;
+}
+
+.email-item--sent {
+  align-self: flex-end;
+  background: #f1f3f5;
+}
+
+.email-item--reply {
+  align-self: flex-start;
+  background: #ffffff;
+}
+
+.email-item__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 0.3rem;
+}
+
+.email-item__label {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.email-item__meta {
+  /* SC 1.4.3 Contrast (Minimum): solid color, no opacity blend — same
+     principle applied to /chat's .chat-bubble__meta. */
+  font-size: 0.72rem;
+  color: #1a1a1a;
+}
+
+.email-item__subject {
+  font-weight: 600;
+  margin: 0 0 0.25rem 0;
+}
+
+.email-item__body {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.email-item--loading {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  padding: 0.5rem 0.25rem;
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #888;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Escalation reply — deliberately distinct from a normal reply (PRD
+   AC-003, sad.md SS3), same bar and same tokens as /chat's
+   .escalation-notice. */
+.email-escalation {
+  align-self: flex-start;
+  max-width: 85%;
+  background: #fff4e5;
+  border: 1px solid #b45f18;
+  border-left: 4px solid #b45f18;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: #6b3d00;
+}
+
+.email-escalation__header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.95rem;
+}
+
+.email-escalation .email-item__body {
+  color: #6b3d00;
+}
+
+.email-compose-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-top: 1px solid #d0d0d0;
+  background: #fafafa;
+}
+
+.email-compose-form__heading {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.email-compose-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.email-compose-form__field label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.email-compose-form__field input,
+.email-compose-form__field textarea {
+  /* SC 1.4.11 Non-text Contrast: reuses /chat's verified #6b7280 border
+     (~4.6:1 against #fafafa there; this form sits on the same #fafafa
+     background, so the ratio carries over unchanged). */
+  border: 1px solid #6b7280;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  font-size: 1rem;
+}
+
+.email-compose-form__field textarea {
+  resize: vertical;
+}
+
+.email-compose-form button[type="submit"] {
+  align-self: flex-start;
+  padding: 0.55rem 1.2rem;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.email-compose-form button[type="submit"]:disabled {
+  background: #9db8e8;
+  cursor: not-allowed;
+}

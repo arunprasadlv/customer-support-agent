@@ -1,0 +1,122 @@
+# CrewAI task definitions (framework-level config layer).
+#
+# Filled in by @backend.eng (*develop-be) per project-context/1.define/sad.md
+# §2 ("Task / Turn Orchestration" + "Typed Task Outputs (Pydantic
+# contracts)" table) and adapter-crewai.md's `expected_output`/
+# YAML-externalization rule.
+#
+# All 5 tasks live in this one shared file (framework-level config layer,
+# same as agents.yaml). `redact_pii_task` belongs to the standalone
+# `pii_guard` agent and runs BEFORE the reasoning Crew is invoked at all
+# (ADR-003) — it is intentionally NOT part of the `context` chain below.
+# The other 4 tasks belong to the reasoning Crew and are context-chained in
+# this fixed order (sad.md §2 step 3): classify -> retrieve -> sentiment ->
+# compose.
+#
+# `agent` values reference agents.yaml keys; `context` values reference
+# other task keys in this file; `output_pydantic` values reference class
+# names in app.schemas.task_outputs (resolved by the Python crew-builder
+# code in app/agents/, not by CrewAI's YAML auto-mapping — see
+# app/agents/reasoning_crew.py and app/agents/pii_guard.py for why this
+# project uses a small manual loader instead of @CrewBase's automatic
+# config-wide task/agent mapping).
+
+redact_pii_task:
+  agent: pii_guard
+  output_pydantic: RedactionResult
+  description: >
+    Call the `pii_detector` tool exactly once on the following raw inquiry
+    text and return its output unchanged:
+
+    {raw_text}
+
+    Do not detect PII yourself, do not paraphrase or summarize, and do not
+    alter the tool's `clean_text` or `redaction_actions` in any way — your
+    only job is to invoke the tool and relay its result.
+  expected_output: >
+    A RedactionResult with `clean_text` (the input text with every detected
+    PII span masked) and `redaction_actions` (the tool's list of
+    {{entity_type, span_start, span_end, method}} records), exactly as
+    returned by the `pii_detector` tool.
+
+classify_task:
+  agent: query_classifier
+  output_pydantic: ClassificationResult
+  context: []
+  description: >
+    Classify the following guest inquiry into exactly one intent from this
+    domain's taxonomy:
+
+    Inquiry: {clean_text}
+
+    Taxonomy (intent: label - keywords):
+    {taxonomy_summary}
+
+    Choose the single best-matching `intent` value (must exactly match one
+    of the taxonomy `intent` identifiers above) and report a `confidence`
+    between 0.0 and 1.0 reflecting how certain you are. If the inquiry does
+    not clearly match any taxonomy entry, report low confidence rather than
+    forcing a guess.
+  expected_output: >
+    A ClassificationResult with `intent` (one of the taxonomy intent
+    identifiers) and `confidence` (0.0-1.0).
+
+retrieve_knowledge_task:
+  agent: knowledge_retriever
+  output_pydantic: KBRetrievalResult
+  context: [classify_task]
+  description: >
+    Using the `kb_search` tool, retrieve knowledge-base snippets for the
+    intent classified in the previous task, against this guest inquiry:
+
+    Inquiry: {clean_text}
+
+    Call `kb_search` with `intent` set to the previous task's classified
+    intent and `query_text` set to the inquiry text above. Return the
+    tool's output exactly — do not add, remove, or re-score snippets, and
+    do not claim `match_found = true` unless the tool itself reported it.
+  expected_output: >
+    A KBRetrievalResult with `retrieved_snippets` (list of
+    {{kb_entry_id, content, relevance_score}}, as returned by the tool) and
+    `match_found` (exactly as returned by the tool).
+
+analyze_sentiment_task:
+  agent: sentiment_analyzer
+  output_pydantic: SentimentResult
+  context: [classify_task, retrieve_knowledge_task]
+  description: >
+    Analyze the guest's sentiment/frustration level in this inquiry:
+
+    Inquiry: {clean_text}
+
+    Score `sentiment_score` on a 0.0-1.0 scale and assign the matching
+    `sentiment_label`: "neutral" for scores below 0.40, "frustrated" for
+    0.40-0.74, "angry" for 0.75 and above. This score directly decides
+    whether the interaction escalates to a human — do not under-call
+    frustration expressed through formal or polite language.
+  expected_output: >
+    A SentimentResult with `sentiment_score` (0.0-1.0) and `sentiment_label`
+    ("neutral" | "frustrated" | "angry") consistent with the boundaries
+    above.
+
+compose_response_task:
+  agent: response_composer
+  output_pydantic: ComposedResponse
+  context: [classify_task, retrieve_knowledge_task, analyze_sentiment_task]
+  description: >
+    Compose a guest-facing reply to this inquiry:
+
+    Inquiry: {clean_text}
+
+    Use the classified intent, the retrieved KB snippets (if any), and the
+    sentiment score/label from the previous tasks to write a tone-adjusted,
+    professional, concise reply. If the retrieval task reported
+    `match_found = false`, you have no grounded policy content to answer
+    from — do not invent one; write a reply that honestly acknowledges the
+    question and explains a human will follow up, and set `grounded =
+    false`. Otherwise set `grounded` to match the retrieval task's
+    `match_found` value exactly.
+  expected_output: >
+    A ComposedResponse with `draft_response` (the guest-facing reply text)
+    and `grounded` (true only if `match_found` was true on the retrieval
+    task — never self-declared true when no KB snippet was used).

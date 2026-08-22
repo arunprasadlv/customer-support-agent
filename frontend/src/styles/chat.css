@@ -1,0 +1,229 @@
+/* /chat route styles (aamad.config.yml ui.visual_style: minimal — plain
+   CSS, no component library/Tailwind, matches sad.md SS3). Scoped to
+   the chat surface only; imported by routes/Chat.tsx. */
+
+.chat-page {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.chat-page__subtitle {
+  color: #555;
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+}
+
+.chat-window {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  height: 60vh;
+  min-height: 420px;
+  overflow: hidden;
+  background: #fff;
+  color: #1a1a1a;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  /* New rows fade/slide in on mount. React only mounts genuinely new
+     message elements (existing rows keep their stable `key` and don't
+     remount), so this only plays once per new message, not on every
+     re-render. Neutralized under prefers-reduced-motion by the global
+     reset in index.css. */
+  animation: message-in 0.25s ease-out;
+}
+
+@keyframes message-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-row--guest {
+  justify-content: flex-end;
+}
+
+.chat-row--assistant {
+  justify-content: flex-start;
+}
+
+.bot-avatar {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #2563eb;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.bot-avatar--thinking {
+  animation: bot-avatar-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bot-avatar-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.12);
+    opacity: 0.8;
+  }
+}
+
+.chat-bubble {
+  max-width: 75%;
+  padding: 0.6rem 0.85rem;
+  border-radius: 12px;
+  line-height: 1.4;
+}
+
+.chat-bubble p {
+  margin: 0 0 0.25rem 0;
+  white-space: pre-wrap;
+}
+
+.chat-bubble--guest {
+  background: #2563eb;
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+
+.chat-bubble--assistant {
+  background: #f1f3f5;
+  color: #1a1a1a;
+  border-bottom-left-radius: 2px;
+}
+
+.chat-bubble__meta {
+  /* SC 1.4.3 Contrast (Minimum): deliberately solid (no opacity blend).
+     Reducing opacity here would blend the timestamp toward its
+     background and drop below 4.5:1 for this small (0.72rem) text —
+     e.g. white-on-#2563eb at opacity 0.7 measures ~3.34:1. Using the
+     same solid color as the message text (already verified >=4.5:1)
+     and differentiating by size only keeps this compliant. */
+  display: block;
+  font-size: 0.72rem;
+}
+
+.chat-bubble--loading {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.75rem 1rem;
+}
+
+.typing-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #888;
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+/* Escalation notice — deliberately distinct from a normal chat bubble
+   (PRD AC-003, sad.md SS3): warm warning palette + icon + explicit
+   label, never styled to look like a normal resolved answer. */
+.escalation-notice {
+  /* SC 1.4.11 Non-text Contrast: border darkened from the original
+     #f0a94f/#d9822b pair (~1.84:1 / ~2.69:1 against #fff4e5 — both
+     failed the 3:1 minimum for a UI component boundary) to #b45f18,
+     which measures ~4.2:1 against this background. */
+  max-width: 85%;
+  background: #fff4e5;
+  border: 1px solid #b45f18;
+  border-left: 4px solid #b45f18;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  color: #6b3d00;
+}
+
+.escalation-notice__header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.95rem;
+}
+
+.escalation-notice p {
+  margin: 0 0 0.25rem 0;
+}
+
+.chat-input {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-top: 1px solid #d0d0d0;
+  background: #fafafa;
+}
+
+.chat-input input {
+  /* SC 1.4.11 Non-text Contrast: form-field border darkened from #ccc
+     (~1.54:1 against the #fafafa input-row background — fails the 3:1
+     minimum) to #6b7280, which measures ~4.6:1. */
+  flex: 1;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid #6b7280;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+.chat-input button {
+  padding: 0.55rem 1.2rem;
+  border: none;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-input button:disabled {
+  background: #9db8e8;
+  cursor: not-allowed;
+}

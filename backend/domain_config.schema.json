@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://customer-support-agent.local/schemas/domain_config.schema.json",
+  "title": "Domain Configuration",
+  "description": "Schema-validated domain configuration envelope (PRD 'Domain configuration format: JSON, schema-validated'; sad.md §2 ADR-005). taxonomy/knowledge_base item shapes resolved by @system-arch in ADR-005 (keyword/section-scored retrieval, no vector store).",
+  "type": "object",
+  "required": ["domain", "version", "taxonomy", "knowledge_base", "prompts"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Self-reference to this schema file, e.g. './domain_config.schema.json'."
+    },
+    "domain": {
+      "type": "string",
+      "description": "Domain identifier, e.g. 'hotel'."
+    },
+    "version": {
+      "type": "string",
+      "description": "Domain config version (semver-style string)."
+    },
+    "description": {
+      "type": "string"
+    },
+    "taxonomy": {
+      "type": "array",
+      "description": "Intent/category taxonomy entries consumed by query_classifier and knowledge_retriever (sad.md §2 ADR-005).",
+      "items": {
+        "type": "object",
+        "required": ["intent", "label", "keywords"],
+        "properties": {
+          "intent": { "type": "string", "description": "Stable intent identifier, e.g. 'reservations_booking'." },
+          "label": { "type": "string", "description": "Human-readable category label." },
+          "keywords": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "knowledge_base": {
+      "type": "array",
+      "description": "KB entries retrievable by knowledge_retriever via keyword/section-scored matching, floor 0.20, top 3 (sad.md §2 ADR-005). No vector store for MVP.",
+      "items": {
+        "type": "object",
+        "required": ["kb_entry_id", "intent", "section", "keywords", "content"],
+        "properties": {
+          "kb_entry_id": { "type": "string" },
+          "intent": { "type": "string", "description": "Must match a taxonomy[].intent value." },
+          "section": { "type": "string", "description": "Sub-topic label within the intent." },
+          "keywords": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "content": { "type": "string", "description": "Groundable answer text returned to response_composer." }
+        },
+        "additionalProperties": false
+      }
+    },
+    "prompts": {
+      "type": "object",
+      "description": "TODO(@backend.eng): prompt fragments templated into task descriptions/inputs. Shape undefined at scaffold time."
+    }
+  },
+  "additionalProperties": false
+}
