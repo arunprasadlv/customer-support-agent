@@ -13,9 +13,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
-    "crewai>=0.80",
+    "crewai[anthropic]>=1.15",
     "python-dotenv>=1.0",
     "jsonschema>=4.22",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -58,3 +59,6 @@ exclude = ["tests/"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "integration: exercises multiple modules together (may still be pure-Python/monkeypatched); a subset requires a live ANTHROPIC_API_KEY and self-skips without one.",
+]
