@@ -282,3 +282,110 @@
   margin: 0;
   padding-left: 1.25rem;
 }
+
+/* --- Escalated — Needs Resolution (frontend.md §11) ---
+   Reuses the same tokens as the KB review queue above: #d0d0d0
+   decorative card borders, #6b7280 field borders, #2563eb/#ffffff
+   primary-button pairing — no new colors introduced. */
+
+.escalation-queue__status {
+  min-height: 1.2rem;
+  font-weight: 600;
+}
+
+.escalation-queue__status:empty {
+  margin: 0;
+}
+
+.escalation-queue__empty {
+  color: #555;
+  font-style: italic;
+}
+
+.escalation-queue__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.escalation-item {
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  background: #ffffff;
+}
+
+.escalation-item__column-heading {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #555;
+  margin: 0 0 0.4rem 0;
+}
+
+.escalation-item__original-query {
+  margin: 0 0 1rem 0;
+}
+
+.escalation-item__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: flex-start;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.escalation-item__actions legend {
+  font-weight: 600;
+  font-size: 0.85rem;
+  padding: 0;
+}
+
+.escalation-item__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.escalation-item__field label {
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.escalation-item__field textarea {
+  /* SC 1.4.11 Non-text Contrast: same #6b7280 token as review-item's
+     edit fields, ~4.6:1 verified on light backgrounds. */
+  border: 1px solid #6b7280;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font: inherit;
+  font-size: 1rem;
+  width: 100%;
+  resize: vertical;
+}
+
+.escalation-item__submit-btn {
+  background: #2563eb;
+  color: #ffffff;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.escalation-item__submit-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.escalation-item__error {
+  color: #6b3d00;
+  margin: 0.75rem 0 0 0;
+}

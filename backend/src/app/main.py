@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -79,6 +81,33 @@ app = FastAPI(
         "POST /chat is implemented (Phase 1) — see "
         "project-context/2.build/backend.md for build history and scope."
     ),
+)
+
+# `@integration.eng`'s `*integrate-api` (2026-08-24) — dev-time CORS so the
+# Vite frontend (a different origin: localhost:5173/5174) can call this API
+# from the browser; without this, all frontend fetch() calls fail on the
+# preflight/response before ever reaching a route (curl/server-to-server
+# calls are unaffected — CORS is a browser-enforced restriction only, which
+# is why this gap wasn't visible in @backend.eng's curl-based manual
+# testing). sad.md does not pin an allowed-origins list, so this is a
+# judgment call, documented in integration.md: default to the two Vite dev
+# ports FastAPI/Vite actually use, override via `CORS_ALLOWED_ORIGINS` (a
+# comma-separated list) for any other deployment target rather than
+# hardcoding further origins here. No credentials/cookies are used by this
+# MVP (no auth), so `allow_credentials=False`.
+_default_cors_origins = "http://localhost:5173,http://localhost:5174"
+_cors_allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ALLOWED_ORIGINS", _default_cors_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
 )
 
 
