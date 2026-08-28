@@ -24,7 +24,7 @@ export default function QuickReplyOptions({ message }: QuickReplyOptionsProps) {
     <div className="chat-row chat-row--assistant">
       <BotAvatar />
       <div className="chat-bubble chat-bubble--assistant chat-bubble--options">
-        <p>{message.text}</p>
+        {message.text && <p>{message.text}</p>}
         <div
           className="quick-reply-group"
           role="group"

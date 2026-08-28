@@ -40,6 +40,22 @@ function createId(): string {
 export default function ChatWindow() {
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME_MESSAGE]);
   const [isLoading, setIsLoading] = useState(false);
+  // Populated once by the mount-time `/taxonomy` fetch below, then reused
+  // by both the initial category-chips message and every later "Start
+  // Over" chip — avoids re-fetching on every Start Over click. A `ref`,
+  // not `useState`: category/question chips are built inside a
+  // mount-only `useEffect(..., [])`, so their `onSelect` closures (which
+  // eventually call `handleSend` -> `appendStartOverOption`) are frozen
+  // at that effect's first (and only) run — a `useState` value read
+  // there would forever see its initial `[]`, silently skipping "Start
+  // Over" for every chip-triggered response (only a truly free-typed
+  // message, whose `handleSend` closure comes fresh off the latest
+  // render, would see an updated `useState` value). A `ref` sidesteps
+  // this: every closure, stale or fresh, reads `.current` off the same
+  // shared object, so it's always current regardless of which render
+  // created the closure. Stays `[]` if the `/taxonomy` fetch failed
+  // (fail-open) — Start Over checks this before appending anything.
+  const taxonomyEntriesRef = useRef<TaxonomyEntry[]>([]);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -73,6 +89,13 @@ export default function ChatWindow() {
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
+      // After every response (normal or escalated), offer a "Start Over"
+      // chip back to the top-level taxonomy — only when the taxonomy
+      // actually loaded (appendStartOverOption checks
+      // taxonomyEntriesRef.current.length; if `/taxonomy` failed on
+      // mount, there's nothing to start over into, so this is silently
+      // skipped rather than appending a chip that leads nowhere).
+      appendStartOverOption();
     } finally {
       setIsLoading(false);
     }
@@ -107,6 +130,61 @@ export default function ChatWindow() {
     setMessages((prev) => [...prev, questionsMessage]);
   }
 
+  /**
+   * Appends the top-level category-chips message (the taxonomy's 4
+   * labels as pills). Shared by the mount-time fetch (first display) and
+   * the "Start Over" chip (re-display) — takes `entries` as a parameter
+   * rather than reading `taxonomyEntries` state directly so the mount
+   * effect can call it in the same tick it receives the fetch result,
+   * before that state update has necessarily applied.
+   */
+  function appendCategoryOptions(entries: TaxonomyEntry[]) {
+    const categoryMessage: ChatMessage = {
+      id: createId(),
+      role: "assistant",
+      kind: "options",
+      text: "Here are some things I can help with — pick a topic, or just type your question below.",
+      optionsGroupLabel: "Choose a topic",
+      options: entries.map((entry) => ({
+        id: entry.intent,
+        label: entry.label,
+        onSelect: () => handleCategorySelect(entry),
+      })),
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, categoryMessage]);
+  }
+
+  /**
+   * Appends a single-chip "Start Over" options message after a response
+   * is delivered (handleSend, both the normal and escalated branches).
+   * Clicking it re-displays the full taxonomy from scratch via
+   * `appendCategoryOptions` — reuses the taxonomy fetched once on mount
+   * (`taxonomyEntries`) rather than re-fetching `/taxonomy` on every
+   * click. Non-destructive: earlier messages (including prior chip
+   * messages) are left in the transcript, same "append, never remove"
+   * convention the rest of this quick-reply flow already follows.
+   */
+  function appendStartOverOption() {
+    if (taxonomyEntriesRef.current.length === 0) return;
+    const startOverMessage: ChatMessage = {
+      id: createId(),
+      role: "assistant",
+      kind: "options",
+      text: "",
+      optionsGroupLabel: "Start over",
+      options: [
+        {
+          id: "start-over",
+          label: "Start Over",
+          onSelect: () => appendCategoryOptions(taxonomyEntriesRef.current),
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, startOverMessage]);
+  }
+
   useEffect(() => {
     // Step 1 of the quick-reply flow (frontend.md §12): fetch the domain
     // taxonomy once on mount and, on success, append a category-chips
@@ -118,20 +196,8 @@ export default function ChatWindow() {
     getTaxonomy()
       .then((entries) => {
         if (cancelled || entries.length === 0) return;
-        const categoryMessage: ChatMessage = {
-          id: createId(),
-          role: "assistant",
-          kind: "options",
-          text: "Here are some things I can help with — pick a topic, or just type your question below.",
-          optionsGroupLabel: "Choose a topic",
-          options: entries.map((entry) => ({
-            id: entry.intent,
-            label: entry.label,
-            onSelect: () => handleCategorySelect(entry),
-          })),
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, categoryMessage]);
+        taxonomyEntriesRef.current = entries;
+        appendCategoryOptions(entries);
       })
       .catch((error: unknown) => {
         console.warn(
