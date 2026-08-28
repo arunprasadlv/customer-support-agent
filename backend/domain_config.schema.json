@@ -54,7 +54,11 @@
             "items": { "type": "string" },
             "minItems": 1
           },
-          "content": { "type": "string", "description": "Groundable answer text returned to response_composer." }
+          "content": { "type": "string", "description": "Groundable answer text returned to response_composer." },
+          "example_query": {
+            "type": "string",
+            "description": "A natural guest-phrased question this entry answers, surfaced by GET /taxonomy as a quick-reply suggestion (frontend chat UI). Optional — entries without one are simply not offered as a suggestion."
+          }
         },
         "additionalProperties": false
       }

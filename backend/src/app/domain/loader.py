@@ -70,6 +70,14 @@ class KBEntry(BaseModel):
     section: str
     keywords: list[str] = Field(default_factory=list)
     content: str
+    example_query: str | None = Field(
+        default=None,
+        description=(
+            "Natural guest-phrased question this entry answers — surfaced by "
+            "GET /taxonomy as a chat quick-reply suggestion. Not used by "
+            "kb_search's retrieval scoring (ADR-005 is unchanged)."
+        ),
+    )
 
 
 class DomainConfig(BaseModel):

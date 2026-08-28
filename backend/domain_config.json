@@ -1,7 +1,7 @@
 {
   "$schema": "./domain_config.schema.json",
   "domain": "hotel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Hotel/Hospitality domain configuration (FR-012/FR-013). Seeded per sad.md §2 ADR-005 with the four FR-013 scenario categories; @backend.eng may extend keywords/content further during Build.",
   "taxonomy": [
     {
@@ -31,84 +31,96 @@
       "intent": "reservations_booking",
       "section": "Cancellation policy",
       "keywords": ["cancel", "cancellation", "refund", "deadline"],
-      "content": "Reservations can be cancelled free of charge up to 48 hours before check-in. Cancellations within 48 hours of check-in are charged one night's room rate."
+      "content": "Reservations can be cancelled free of charge up to 48 hours before check-in. Cancellations within 48 hours of check-in are charged one night's room rate.",
+      "example_query": "What is your cancellation policy?"
     },
     {
       "kb_entry_id": "kb-res-002",
       "intent": "reservations_booking",
       "section": "Modifying a booking",
       "keywords": ["modify", "change dates", "reservation", "room type"],
-      "content": "Guests can change reservation dates or room type online up to 24 hours before check-in, subject to availability, or by contacting the front desk directly."
+      "content": "Guests can change reservation dates or room type online up to 24 hours before check-in, subject to availability, or by contacting the front desk directly.",
+      "example_query": "Can I change the dates on my reservation?"
     },
     {
       "kb_entry_id": "kb-res-003",
       "intent": "reservations_booking",
-      "section": "Checking availability",
-      "keywords": ["availability", "check availability", "book", "rate", "price"],
-      "content": "Room availability and current rates can be checked for any date range through the booking widget; rates vary by season and room type and are confirmed at the time of booking."
+      "section": "New booking requests",
+      "keywords": ["availability", "vacancy", "book", "have room", "any rooms"],
+      "content": "This assistant cannot search room availability or create a new booking; guests should use the booking widget on the website or contact the front desk directly for new reservations. Guests can still get help here with anything related to a booking they've already made — modifying dates or room type, cancellations, and billing questions.",
+      "example_query": "Do you have any rooms available this weekend?"
     },
     {
       "kb_entry_id": "kb-checkin-001",
       "intent": "checkin_checkout_billing",
       "section": "Check-in/check-out times",
-      "keywords": ["check-in", "checkin", "check-out", "checkout", "early check-in", "late check-out"],
-      "content": "Standard check-in is 3:00 PM and check-out is 11:00 AM. Early check-in and late check-out are available on request, subject to room readiness, and may incur an additional fee."
+      "keywords": ["check-in", "checkin", "check-out", "checkout"],
+      "content": "Standard check-in is 3:00 PM and check-out is 11:00 AM. Early check-in and late check-out are available on request, subject to room readiness, and may incur an additional fee.",
+      "example_query": "What time is check-in and check-out?"
     },
     {
       "kb_entry_id": "kb-checkin-002",
       "intent": "checkin_checkout_billing",
       "section": "Billing disputes",
-      "keywords": ["folio", "invoice", "bill", "billing", "charge", "overcharge"],
-      "content": "If a charge on your folio looks incorrect, the front desk can pull an itemized invoice and review each line with you; disputed charges are corrected or refunded within 5 business days."
+      "keywords": ["folio", "invoice", "bill", "billing", "charge"],
+      "content": "If a charge on your folio looks incorrect, the front desk can pull an itemized invoice and review each line with you; disputed charges are corrected or refunded within 5 business days.",
+      "example_query": "I have a question about a charge on my bill."
     },
     {
       "kb_entry_id": "kb-checkin-003",
       "intent": "checkin_checkout_billing",
       "section": "Deposits and refunds",
       "keywords": ["deposit", "refund", "payment"],
-      "content": "A refundable security deposit may be held at check-in and is released back to the original payment method within 3-5 business days after check-out, pending a room damage check."
+      "content": "A refundable security deposit may be held at check-in and is released back to the original payment method within 3-5 business days after check-out, pending a room damage check.",
+      "example_query": "When will my deposit be refunded?"
     },
     {
       "kb_entry_id": "kb-room-001",
       "intent": "room_service_amenities",
       "section": "Room service hours",
       "keywords": ["room service", "late night menu", "breakfast"],
-      "content": "Room service is available from 6:00 AM to midnight, with a limited late-night menu after 11:00 PM. Breakfast room service can be ordered the night before for early delivery."
+      "content": "Room service is available from 6:00 AM to midnight, with a limited late-night menu after 11:00 PM. Breakfast room service can be ordered the night before for early delivery.",
+      "example_query": "What are your room service hours?"
     },
     {
       "kb_entry_id": "kb-room-002",
       "intent": "room_service_amenities",
       "section": "Amenities & housekeeping",
-      "keywords": ["amenity", "amenities", "towels", "housekeeping", "minibar", "extra pillow"],
-      "content": "Extra towels, pillows, or minibar restocking can be requested any time through the in-room phone or chat; standard housekeeping requests are fulfilled within 30 minutes."
+      "keywords": ["amenity", "amenities", "towels", "housekeeping", "minibar"],
+      "content": "Extra towels, pillows, or minibar restocking can be requested any time through the in-room phone or chat; standard housekeeping requests are fulfilled within 30 minutes.",
+      "example_query": "Can I get extra towels sent to my room?"
     },
     {
       "kb_entry_id": "kb-room-003",
       "intent": "room_service_amenities",
       "section": "Hotel facilities",
       "keywords": ["wifi", "wi-fi", "pool", "gym", "spa"],
-      "content": "Wi-Fi is complimentary throughout the hotel. The pool and gym are open 6:00 AM to 10:00 PM daily; the spa operates by appointment, bookable at the front desk or via the concierge."
+      "content": "Wi-Fi is complimentary throughout the hotel. The pool and gym are open 6:00 AM to 10:00 PM daily; the spa operates by appointment, bookable at the front desk or via the concierge.",
+      "example_query": "What time does the pool and gym open?"
     },
     {
       "kb_entry_id": "kb-complaint-001",
       "intent": "general_complaints",
       "section": "Noise complaints",
       "keywords": ["noise", "noisy", "complaint", "disappointed"],
-      "content": "We take noise complaints seriously — please contact the front desk immediately and we will address the disturbance or offer a room change where available."
+      "content": "We take noise complaints seriously — please contact the front desk immediately and we will address the disturbance or offer a room change where available.",
+      "example_query": "I'd like to report a noise complaint."
     },
     {
       "kb_entry_id": "kb-complaint-002",
       "intent": "general_complaints",
       "section": "Room condition issues",
       "keywords": ["dirty", "broken", "issue with my stay", "unacceptable"],
-      "content": "Any issue with room cleanliness or broken fixtures is escalated to housekeeping/maintenance immediately; guests are offered a room change or a service credit depending on the issue."
+      "content": "Any issue with room cleanliness or broken fixtures is escalated to housekeeping/maintenance immediately; guests are offered a room change or a service credit depending on the issue.",
+      "example_query": "Something in my room is broken."
     },
     {
       "kb_entry_id": "kb-complaint-003",
       "intent": "general_complaints",
       "section": "Staff conduct concerns",
       "keywords": ["rude", "unhappy", "dissatisfied", "poor experience", "complain"],
-      "content": "Concerns about staff conduct are taken seriously and reviewed by hotel management; guests are encouraged to share specifics so the matter can be properly investigated."
+      "content": "Concerns about staff conduct are taken seriously and reviewed by hotel management; guests are encouraged to share specifics so the matter can be properly investigated.",
+      "example_query": "I want to raise a concern about staff conduct."
     }
   ],
   "prompts": {}

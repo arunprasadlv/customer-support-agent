@@ -522,3 +522,125 @@ Steps 1–7 exercise the exact HTTP contract `resolveEscalation`/`getInteraction
 - **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new dependencies added. `npm run build` for TypeScript/build validation; the operator's already-running backend (`:8000`) and frontend dev server (`:5173`), verified via `curl` before use, no new servers started; `curl` for the real end-to-end backend round trip (SS11.7); `npx @axe-core/cli` 4.13.0 (chrome-headless) for the accessibility check (SS11.6).
 - **Prohibited actions confirmed avoided**: no new mock layer built for `resolveEscalation` (calls the real backend directly, per explicit instruction); no changes to `/chat`, `/inbox`, `InteractionLogTable.tsx`, `ReviewQueueItem.tsx`, or any `backend/` file; no new UI component library or Tailwind introduced; `InteractionLog.tsx`/`ReviewQueue.tsx` changes are additive-only (one optional prop + one dependency-array entry each), not a rewrite of their existing fetch/error-handling logic.
 - **Ambiguity resolved, not silently assumed**: the needs-resolution rule (SS11.3) and the refresh mechanism (SS11.4) were both explicitly specified by the operator and implemented as specified, not independently reinterpreted; the backend's missing `outcome` guard on resolve (SS11.3) was surfaced as an Open Question rather than fixed (backend changes out of this action's scope).
+
+## 12. `/chat` quick-reply chips — taxonomy -> common questions (`*develop-fe`, live-wired)
+
+Follow-up action closing a real UX gap named directly by the operator: guests previously landed on `/chat` with only the static welcome message and a blank text box, with no hint of what the assistant can help with. `GET /taxonomy` (already built, live, and verified working on the real backend — `backend/src/app/main.py`'s `CommonQuery`/`TaxonomyEntry` models and `get_taxonomy` handler, read directly rather than guessed) already exposes exactly the data needed: 4 domain categories, 3 example questions each. This action wires that endpoint into a two-step quick-reply chip UX inside the existing `ChatWindow`, additive to (never replacing) free-text input.
+
+### 12.1 Component structure
+
+```
+frontend/src/
+├── types/
+│   ├── chat.ts          # + "options" ChatMessageKind, QuickReplyOption (label + baked-in onSelect),
+│   │                     #   ChatMessage.options?/optionsGroupLabel? (both optional, only set for "options")
+│   └── taxonomy.ts       # NEW — CommonQuery/TaxonomyEntry, mirrors main.py's Pydantic models exactly
+├── lib/
+│   └── taxonomyClient.ts # NEW — getTaxonomy(): Promise<TaxonomyEntry[]>, calls real GET /taxonomy via
+│                          #   apiClient.ts's apiFetch (same helper /chat's sendInquiry and /ops's
+│                          #   mockOpsData.ts already use for the real backend)
+├── components/
+│   ├── QuickReplyOptions.tsx  # NEW — renders one "options" ChatMessage: chat-row/BotAvatar shell +
+│   │                          #   intro text + a role="group" pill-button list
+│   └── ChatWindow.tsx         # + taxonomy fetch-on-mount effect, handleCategorySelect, render branch
+└── styles/chat.css            # + .quick-reply-group/.quick-reply-chip/.chat-bubble--options rules
+```
+
+No changes to `MessageBubble.tsx`, `EscalationNotice.tsx`, `ChatInput.tsx`, `mockInquiryClient.ts`, `apiClient.ts`, `/inbox`, `/ops`, or any `backend/` file.
+
+### 12.2 The two-step UX decision
+
+Per the operator's confirmed flow, implemented exactly as specified rather than independently redesigned:
+
+1. **On mount**, `ChatWindow` fetches `GET /taxonomy` once, in a `useEffect` alongside the existing static `WELCOME_MESSAGE`. On success, it appends one new assistant `"options"` message showing the 4 category labels as chips ("Reservations & Booking", "Check-in/Check-out & Billing", "Room Service & Amenities", "General Complaints").
+2. **Clicking a category chip** is pure local UI navigation — no backend call, no guest-transcript entry. It appends a second assistant `"options"` message showing that category's 3 `common_queries` as chips (the `query` text as each chip's label).
+3. **Clicking a common-question chip** sends it exactly as if the guest had typed and submitted it: it is routed through `ChatWindow`'s existing `handleSend(text)` — same guest-bubble append, same `isLoading`/`LoadingIndicator` state, same `sendInquiry` call, same escalation-vs-normal-reply rendering. No parallel send path was built.
+4. **Chip messages are append-only and never removed or collapsed** after use — consistent with the existing `messages` array being append-only everywhere else in this component (welcome message, guest/assistant turns). A guest can scroll back and click category or common-question chips again at any time; no "used" flag or dedup logic was added, per the operator's explicit instruction to keep this simple.
+5. **`ChatInput`/free text is untouched** — chips are additive. A guest can ignore every chip and type anything, exactly as before this action.
+
+**Implementation shape**: a single new `ChatMessageKind = "options"` (not two separate kinds for "category" vs. "query") carrying `options: QuickReplyOption[]`, where each `QuickReplyOption` is `{ id, label, onSelect: () => void }`. The `onSelect` closure is baked in by whichever `ChatWindow` function *builds* the message (the taxonomy-fetch effect for category chips, `handleCategorySelect` for common-question chips) — so `QuickReplyOptions.tsx` itself is a pure, semantics-free renderer that never branches on "is this a category chip or a question chip." This was chosen over two distinct `ChatMessageKind`s (e.g. `"category-options"`/`"query-options"`) because the only actual difference between the two steps is *what a click does*, not how the chip set is rendered or grouped — encoding that difference as data (a closure) on the option itself, rather than as a second message-kind branch in the render loop, kept `ChatWindow`'s render loop at three cases (`"escalation"`/`"options"`/default `"text"`) instead of four, and kept `QuickReplyOptions.tsx` fully reusable for both steps with zero conditional logic inside it.
+
+### 12.3 Visual style — pill/chip buttons, contrast computed (not assumed)
+
+Per the operator-supplied reference: rounded-full ("pill"/stadium) shape, white background, thin ~1px border, blue text, `~0.5rem 1rem` padding, chips wrap in a flex row with `~0.6rem` gap, left-aligned, no drop shadow.
+
+```css
+.quick-reply-chip {
+  background: #ffffff;
+  border: 1px solid #6b7280;
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  color: #2563eb;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.quick-reply-chip:hover {
+  background: #eff6ff;
+}
+```
+
+**Colors reused, not invented** (per instruction): `#2563eb` (this app's established primary blue — Send button, guest bubble background) for chip text; `#6b7280` (the existing form-field-border token, `.chat-input input`'s border, already verified at ~4.6:1 against `#fafafa` in §8) for the chip border.
+
+**Contrast computed via the WCAG relative-luminance formula (§8's method), not assumed**:
+
+| Pairing | Ratio | Requirement | Result |
+|---|---|---|---|
+| `#2563eb` text on `#ffffff` chip background | 5.17:1 | SC 1.4.3, ≥4.5:1 (normal text) | Pass |
+| `#2563eb` text on `#eff6ff` hover background | 4.75:1 | SC 1.4.3, ≥4.5:1 | Pass |
+| `#6b7280` border on `#ffffff` chip background | 4.83:1 | SC 1.4.11 Non-text Contrast, ≥3:1 | Pass |
+| (for reference) `#d0d0d0` border on `#ffffff` | 1.54:1 | SC 1.4.11, ≥3:1 | **Fail — not used here** |
+
+The last row is why `#d0d0d0` was rejected for this control despite being an existing "border" token in this app: §9.6 reasoned `#d0d0d0` panel/card borders (`.chat-window`, `.chat-input`, `.review-item`, etc.) as *decorative*, not subject to SC 1.4.11, because they bound non-interactive containers. A quick-reply chip is a real `<button>` — an interactive UI component whose boundary SC 1.4.11 explicitly covers — so that decorative exemption does not apply here and was not extended to it; `#6b7280` was used instead specifically because it passes the 3:1 UI-component minimum where `#d0d0d0` does not (1.54:1, computed above, confirms it would have failed).
+
+### 12.4 Accessibility approach (WCAG 2.2 AA bar, §8's established target)
+
+- Each chip is a real `<button type="button">` (`QuickReplyOptions.tsx`), not a styled `<div>`/`<a>` — SC 4.1.2, 2.1.1.
+- Each chip set is wrapped in `<div role="group" aria-label="...">` — `"Choose a topic"` for the category set, `"Choose a question"` for a common-question set (`ChatMessage.optionsGroupLabel`, set by whichever `ChatWindow` function builds the message) — so a screen-reader user gets an accessible name for what the button list represents, not just a bare list of buttons.
+- Chip messages append into the existing `.chat-messages` `role="log" aria-live="polite"` region exactly like every other message — same nested-live-region characteristic already flagged in this file's Open Questions (§ Open Questions, "no separate `aria-live` on `LoadingIndicator`" discussion); not a new problem introduced by this action, just consistent with how the rest of the transcript already announces.
+- Reuses the global `:focus-visible` ring (`index.css`) and `prefers-reduced-motion` handling (`.chat-row`'s `message-in` animation, already neutralized under reduced motion) — nothing new needed for either.
+- `QuickReplyOptions.tsx` reuses the exact `chat-row`/`BotAvatar`/`chat-bubble--assistant`/`chat-bubble__meta` shell `MessageBubble.tsx` uses, so it reads as "the assistant sent you some options" with the same visual/semantic pattern as every other assistant turn, differing only in body content (a button group instead of a lone `<p>`).
+
+**Verification performed**: `npx @axe-core/cli http://localhost:5173/chat` (axe-core 4.13.0, chrome-headless) against the initial page load (category chips visible, the default state after the taxonomy fetch resolves) — **0 violations**. Because axe-core CLI has no built-in click/interaction support, a second pass was scripted directly against the same installed axe-core 4.13.0 engine via `selenium-webdriver`/`chromedriver` (both already present as `@axe-core/cli`'s own dependencies, reused rather than adding a new tool): navigate to `/chat`, click a category chip, wait for the resulting common-question chip set to render (and for the `.chat-row` fade-in animation to finish, to avoid a false-positive contrast read mid-transition), then run `axe.run(document)` with both chip sets simultaneously visible in the DOM — **0 violations**. (First run of that second pass, before the animation-settle wait was added, surfaced a transient `color-contrast` finding on the just-appeared chips — traced to auditing mid-fade opacity, not a real static-CSS issue; confirmed by re-running after the 250ms `message-in` animation had time to finish, which passed clean. Recorded here rather than silently discarded, since it could otherwise look like an unexplained pass/fail flip.) Manual NVDA/JAWS/VoiceOver pass not performed — same pre-existing gap as §8/§9/§10/§11 (no Windows/macOS AT available in this execution environment).
+
+### 12.5 Verification performed (real round trip, no mock layer)
+
+Both backend (`:8000`) and frontend (`:5173`) were already running; confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl http://localhost:5173/` (`200`) before starting anything. `curl http://localhost:8000/taxonomy` confirmed the live 4-category/3-question response shape ahead of writing `types/taxonomy.ts`, per the instruction to read the exact contract rather than guess it.
+
+1. Loaded `/chat` in a real (headless Chrome) browser session — the welcome message rendered, followed by a new assistant message with 4 pill chips: "Reservations & Booking", "Check-in/Check-out & Billing", "Room Service & Amenities", "General Complaints".
+2. Clicked "Reservations & Booking" — a new assistant message appeared with 3 pill chips: "What is your cancellation policy?", "Can I change the dates on my reservation?", "Do you have any rooms available this weekend?". The category chip message remained visible above it (not removed/collapsed).
+3. Clicked "Do you have any rooms available this weekend?" — it appeared as a guest message bubble, the loading indicator appeared, and a real assistant reply was returned from the live backend (a genuine `InquiryFlow` response declining to check live availability and redirecting to the booking widget/front desk — not a canned string), rendered as a normal (non-escalation) bubble. Confirms the chip click drove the exact same `handleSend`/`sendInquiry`/`POST /chat` path a manually typed message would.
+4. `npm run build` (`tsc -b && vite build`) — succeeded, no TypeScript errors (10.53 kB CSS, 255.37 kB JS for the combined `/chat` + `/inbox` + `/ops` bundle).
+
+### Sources (§12 additions)
+
+- `backend/src/app/main.py` — `CommonQuery`/`TaxonomyEntry` Pydantic models and `GET /taxonomy` handler, read directly for the exact response shape (not guessed), plus a live `curl http://localhost:8000/taxonomy` round trip confirming it
+- `frontend/src/lib/apiClient.ts` (existing `apiFetch` helper, reused unmodified)
+- `frontend/src/components/ChatWindow.tsx`/`MessageBubble.tsx`/`EscalationNotice.tsx`/`BotAvatar.tsx` (pattern source, read before extending)
+- `project-context/2.build/frontend.md` §8 (contrast-computation method and established tokens), §9.6 (the `#d0d0d0` decorative-border exemption explicitly not extended here)
+- Operator's UX-flow and visual-style specification (two-step category → common-question chip flow; reference-screenshot pill description), given directly in this action's task
+- Repo state at time of this action: `frontend/src/lib/taxonomyClient.ts`, `frontend/src/types/taxonomy.ts`, `frontend/src/components/QuickReplyOptions.tsx` did not exist before this action
+
+### Assumptions (§12 additions)
+
+- The category-chips intro text ("Here are some things I can help with — pick a topic, or just type your question below.") and the per-category intro text (`Common questions about "<label>":`) are new, small pieces of UI copy not dictated verbatim by PRD/SAD/the operator's task — judged in-scope UI polish (same category as the existing static `WELCOME_MESSAGE`), not a fabricated backend response, since neither calls `sendInquiry` or represents an answer to a guest question.
+- If `GET /taxonomy` resolves to an empty array (not currently possible against the live backend's seed config, but not contractually forbidden by the response type), no chip message is appended at all, silently — treated the same as a fetch failure from the guest's perspective (chat remains usable via free text with no visible error), since an empty chip set would be equivalent to no chips.
+- Taxonomy is fetched exactly once per `ChatWindow` mount (no re-fetch/refresh trigger) — matches this app's existing "single guest session per browser tab, no persistence" posture (§ Assumptions) and the fact that the taxonomy is a static, `lru_cache`d, seed-authored config on the backend (per `main.py`'s `get_taxonomy` docstring), not data expected to change within a session.
+
+### Open Questions (§12 additions)
+
+- Same frontend-test-runner gap as §7/§9/§10/§11 (no Vitest/RTL configured) — `QuickReplyOptions.tsx`/`ChatWindow.tsx`'s new taxonomy logic has no unit/component tests.
+- Same NVDA/JAWS/VoiceOver manual-pass gap as §8/§9/§10/§11 — not available in this execution environment.
+- Whether re-clicking an already-used common-question chip a second time (§12.2 point 4 — no "used" state) should visually indicate it was already asked (e.g. a subtle "asked" badge) is undecided; PRD/SAD don't specify this and the operator explicitly asked for the simpler append-only behavior for this MVP pass — flagged here only as a possible future polish item, not a gap in what was asked for.
+
+### Audit (§12 entry)
+
+- **Timestamp**: 2026-08-27
+- **Persona**: `frontend-eng`
+- **Action**: `develop-fe` (quick-reply taxonomy chips, `/chat`)
+- **Resolved runtime**: `crewai` (`aamad.config.yml runtime.target: crewai`, `AAMAD_TARGET_RUNTIME=crewai` observed in the environment, consistent with the config) — recorded per `aamad-core.md`; not directly load-bearing for this frontend-only UI action, which calls one already-tested, already-live backend REST endpoint (`GET /taxonomy`).
+- **Inputs used**: `backend/src/app/main.py` (`CommonQuery`/`TaxonomyEntry`/`get_taxonomy`, read directly), `frontend/src/lib/apiClient.ts` (reused unmodified), `frontend/src/components/ChatWindow.tsx`/`MessageBubble.tsx`/`EscalationNotice.tsx`/`BotAvatar.tsx`/`ChatInput.tsx` (pattern source), `frontend/src/styles/chat.css`/`index.css` (existing token/animation/focus conventions), `project-context/2.build/frontend.md` §8–§11 (accessibility/documentation/contrast-computation conventions), `aamad.config.yml`, the operator's task description (UX flow, visual-style reference, accessibility bar, verification requirements).
+- **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new npm dependencies added to `package.json`. `npm run build` for TypeScript/build validation; the operator's already-running backend (`:8000`) and frontend dev server (`:5173`), verified via `curl` before use, no new servers started; `curl` for the real `GET /taxonomy`/`POST /chat` contract confirmation and round trip; `npx @axe-core/cli` 4.13.0 (chrome-headless) for the static accessibility check; `selenium-webdriver`/`chromedriver` (both already-installed transitive dependencies of `@axe-core/cli`, invoked directly via a scratch Node script — no new dependency installed) plus the same `axe-core` 4.13.0 engine `@axe-core/cli` uses, to drive the click-through category→common-question interaction and audit both chip states plus the real send round trip in one session.
+- **Prohibited actions confirmed avoided**: no changes to `/inbox`, `/ops`, `MessageBubble.tsx`, `EscalationNotice.tsx`, `ChatInput.tsx`, `mockInquiryClient.ts`, `apiClient.ts`, or any `backend/` file; no new UI component library or Tailwind introduced (plain CSS, consistent with `aamad.config.yml ui.visual_style: minimal` and every prior section of this file); no parallel send path built — common-question chips route through the existing `handleSend`.
+- **Ambiguity resolved, not silently assumed**: the single-`"options"`-kind-with-baked-in-`onSelect` shape (§12.2) was chosen over two distinct message kinds as a judgment call explicitly invited by the task ("whatever's cleanest... don't force one message kind to awkwardly serve two different click behaviors"), and the reasoning is recorded in §12.2 rather than left implicit; the `#6b7280`-vs-`#d0d0d0` border choice (§12.3) was computed, not assumed, specifically because the task called out that the existing `#d0d0d0` decorative-border exemption (§9.6) should not be silently extended to an interactive control.

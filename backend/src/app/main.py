@@ -58,6 +58,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # dependency (pyproject.toml) but was previously unused.
 load_dotenv()
 
+from app.domain.loader import get_domain_config  # noqa: E402
 from app.flows.escalation_resolution_flow import (  # noqa: E402
     OriginalInquiryNotFound,
     run_escalation_resolution,
@@ -115,6 +116,56 @@ app.add_middleware(
 def health() -> dict[str, str]:
     """Liveness/readiness probe required by sad.md §5 (DevOps & Deployment)."""
     return {"status": "ok"}
+
+
+class CommonQuery(BaseModel):
+    """One suggested guest-facing question, tied back to the KB entry it
+    answers (so a frontend quick-reply chip can identify which topic it
+    represents without duplicating the phrasing anywhere)."""
+
+    kb_entry_id: str
+    query: str
+
+
+class TaxonomyEntry(BaseModel):
+    """`GET /taxonomy` response item: one taxonomy category plus the
+    suggested questions for it, for a frontend "common queries" quick-reply
+    UI. Read-only, no request body."""
+
+    intent: str
+    label: str
+    common_queries: list[CommonQuery]
+
+
+@app.get("/taxonomy", response_model=list[TaxonomyEntry])
+def get_taxonomy() -> list[TaxonomyEntry]:
+    """Domain taxonomy + per-category suggested questions, for a chat
+    quick-reply UI (e.g. "Reservations & Booking" -> "What is your
+    cancellation policy?"). Deliberately reads the static, `lru_cache`d
+    `domain_config.json` (`get_domain_config()`) directly, NOT the live
+    mutable `knowledge_base` SQLite table `kb_search` uses (`app.persistence.
+    knowledge_base`) — this endpoint surfaces the curated, seed-authored FAQ
+    topics only; Reviewer-approved entries (`POST /review-queue/{id}/
+    approve`) have no `example_query` and are not meant to appear here.
+    KB entries without an `example_query` are simply omitted (a KB entry
+    doesn't have to have one).
+    """
+    config = get_domain_config()
+    result = []
+    for taxonomy_entry in config.taxonomy:
+        common_queries = [
+            CommonQuery(kb_entry_id=kb_entry.kb_entry_id, query=kb_entry.example_query)
+            for kb_entry in config.knowledge_base
+            if kb_entry.intent == taxonomy_entry.intent and kb_entry.example_query
+        ]
+        result.append(
+            TaxonomyEntry(
+                intent=taxonomy_entry.intent,
+                label=taxonomy_entry.label,
+                common_queries=common_queries,
+            )
+        )
+    return result
 
 
 class ChatRequest(BaseModel):
