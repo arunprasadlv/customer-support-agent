@@ -144,6 +144,7 @@ function toReviewQueueEntry(row: ReviewQueueItemDto): ReviewQueueEntry {
     originalQuery: row.original_query_text ?? row.resolution_text,
     proposedTitle,
     proposedContent: row.candidate_content,
+    keywords: row.candidate_keywords,
     status: row.status,
     decidedAt: row.status !== "pending" ? Date.parse(row.created_at) : undefined,
   };
@@ -184,7 +185,7 @@ interface KBEntryResponseDto {
  * client-assumed — consistent with this MVP having no optimistic-update
  * requirement anywhere else.
  *
- * `edited` (title/content) maps onto the approve request body's
+ * `edited` (title/content/keywords) maps onto the approve request body's
  * `{intent?, section?, keywords?, content?}` (all-optional overrides
  * over the stored candidate — see main.py `ApproveReviewQueueRequest`):
  *   - `edited.content` -> `content` (direct, unambiguous).
@@ -196,14 +197,15 @@ interface KBEntryResponseDto {
  *     unretrievable for its original intent, or retrievable for the
  *     wrong one. `section` is the human-facing heading `intent`
  *     conceptually is not, so that's what "editing the title" should
- *     mean. `keywords` is left unset (falls back to the stored
- *     `candidate_keywords`) — the Edit UI (`ReviewQueueItem.tsx`) has no
- *     keywords field to edit, so there's nothing to map; this does mean
- *     a Reviewer using Edit still can't fix the
- *     always-empty-`candidate_keywords` retrievability gap main.py's
- *     `ApproveReviewQueueRequest` docstring calls out — flagged as an
- *     Open Question in integration.md, not silently worked around by
- *     inventing a keywords UI (out of scope, no new UI this run).
+ *     mean.
+ *   - `edited.keywords` -> `keywords` (direct). Closes a real bug: every
+ *     candidate is queued with `candidate_keywords: []`
+ *     (`EscalationResolutionFlow` never fills this in), and `kb_search`
+ *     skips any entry with zero keywords outright — an un-edited Approve
+ *     writes a live KB row that can never actually be retrieved by a
+ *     guest, even though the write itself succeeds. The Edit UI
+ *     (`ReviewQueueItem.tsx`) now has a keywords field specifically so a
+ *     Reviewer can fix this before approving.
  */
 export async function approveReviewQueueEntry(
   id: string,
@@ -213,7 +215,7 @@ export async function approveReviewQueueEntry(
     method: "POST",
     body: JSON.stringify(
       edited
-        ? { section: edited.title, content: edited.content }
+        ? { section: edited.title, content: edited.content, keywords: edited.keywords }
         : {},
     ),
   });

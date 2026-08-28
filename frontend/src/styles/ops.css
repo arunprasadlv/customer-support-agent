@@ -211,6 +211,32 @@
   resize: vertical;
 }
 
+.review-item__field-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.review-item__keywords {
+  margin: 0.4rem 0 0 0;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.review-item__no-keywords-warning {
+  /* Same #b45f18/#fff4e5/#6b3d00 escalation/warning token trio used
+     elsewhere on this page (.ops-indicator--escalated, review-queue__
+     reject-btn) — a real functional warning (approving as-is silently
+     produces an unretrievable KB entry), not decoration. */
+  margin: 0.4rem 0 0 0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  color: #6b3d00;
+  background: #fff4e5;
+  border: 1px solid #b45f18;
+  border-radius: 6px;
+}
+
 .review-item__actions {
   display: flex;
   gap: 0.6rem;

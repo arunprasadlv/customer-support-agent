@@ -17,7 +17,7 @@
     {
       "intent": "room_service_amenities",
       "label": "Room Service & Amenities",
-      "keywords": ["room service", "amenity", "amenities", "towels", "housekeeping", "minibar", "wifi", "wi-fi", "pool", "gym", "spa", "breakfast", "extra pillow", "late night menu"]
+      "keywords": ["room service", "amenity", "amenities", "towels", "housekeeping", "minibar", "wifi", "wi-fi", "pool", "gym", "spa", "breakfast", "extra pillow", "late night menu", "places to visit", "nearby attractions", "things to do", "local recommendations", "sightseeing"]
     },
     {
       "intent": "general_complaints",

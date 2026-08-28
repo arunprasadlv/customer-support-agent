@@ -58,7 +58,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # dependency (pyproject.toml) but was previously unused.
 load_dotenv()
 
-from app.domain.loader import get_domain_config  # noqa: E402
+from app.domain.loader import derive_keywords, get_domain_config  # noqa: E402
 from app.flows.escalation_resolution_flow import (  # noqa: E402
     OriginalInquiryNotFound,
     run_escalation_resolution,
@@ -500,14 +500,15 @@ class ApproveReviewQueueRequest(BaseModel):
     "Approve (optionally edited) -> entry written to live KB". All fields
     are optional overrides; any field left unset falls back to the queued
     candidate's stored `candidate_*` value. `keywords` in particular
-    matters in practice: `EscalationResolutionFlow` always writes
-    `candidate_keywords=[]` (Phase 2 deliberately left keyword-filling for
-    the Reviewer at approval time, per that flow's own docstring) — ADR-005's
-    keyword-overlap scoring means an entry approved with empty keywords can
-    never actually be retrieved (a 0-length `entry.keywords` list is
-    skipped by `kb_search` outright), so a real Reviewer supplying keywords
-    here is how this candidate becomes retrievable at all, not just a nice-
-    to-have edit."""
+    matters in practice: ADR-005's keyword-overlap scoring means an entry
+    approved with empty keywords can never actually be retrieved (a
+    0-length `entry.keywords` list is skipped by `kb_search` outright).
+    `EscalationResolutionFlow` now auto-derives `candidate_keywords` at
+    queue-time (`domain/loader.py::derive_keywords`) so this usually isn't
+    empty to begin with, and this route re-derives as a fallback if it
+    still is after applying any override (see `approve_review_queue_entry`
+    below) — a Reviewer supplying `keywords` here remains the way to
+    override that default, not the only way to get a retrievable entry."""
 
     intent: str | None = None
     section: str | None = None
@@ -563,7 +564,19 @@ def approve_review_queue_entry(id: str, request: ApproveReviewQueueRequest) -> K
 
     kb_entry_id = f"kb-approved-{uuid.uuid4().hex[:12]}"
     final_section = section or "operator_resolution"
-    final_keywords = keywords or []
+    # Safety net, not the primary mechanism: `EscalationResolutionFlow` now
+    # auto-derives `candidate_keywords` at queue-time (domain/loader.py::
+    # derive_keywords), so this branch should rarely fire for new
+    # candidates. It still exists for: candidates queued before that fix,
+    # a Reviewer who explicitly clears the keywords field, or a query/
+    # resolution pairing whose text shares nothing with its intent's
+    # taxonomy keywords. Writing a KB entry with `keywords=[]` makes it
+    # permanently unretrievable (ADR-005, `kb_search` skips zero-keyword
+    # entries outright) — better to attempt one more deterministic
+    # derivation here than silently accept a dead entry.
+    final_keywords = keywords or derive_keywords(
+        intent, [row["original_query_text"] or "", content]
+    )
     entry: dict[str, Any] = {
         "kb_entry_id": kb_entry_id,
         "intent": intent,
