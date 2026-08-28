@@ -19,11 +19,24 @@ Flow-level hard ceiling: sad.md §7 pins `max_execution_time = 10` (2x the
 p95 target) at the Flow level. This installed CrewAI version's `Flow`
 class has no native flow-level execution-time cap (only `Agent.
 max_execution_time`, a different, per-agent-per-task control) — see
-backend.md Assumptions. This module enforces the 10s ceiling itself via
+backend.md Assumptions. This module enforces the ceiling itself via
 `run_inquiry()`, which bounds `InquiryFlow.kickoff()` with a hard timeout
 and degrades automatically to the escalate branch on expiry, matching
 sad.md §7's stated behavior ("a stuck or abnormally slow run degrades
 automatically to the escalate branch rather than hanging indefinitely").
+
+DEVIATION FROM SAD §7 (recorded, not silent — operator-directed, 2026-08-24):
+live verification during integration (backend.md's own latency spike, plus
+`*verify-messageflow`) measured real 5-agent sequential Crew runs at
+11-19s, well past the SAD's pinned 10s ceiling — every inquiry was hitting
+the timeout branch and losing its real `query_text`/response in the
+interaction log (see `run_inquiry`'s except-branch below). The ceiling was
+raised to 30s as a crude, immediate unblock so inquiries actually complete
+instead of timing out near-universally. This does NOT resolve the
+underlying latency problem (sad.md §7's p95 target is still unmet) — it
+only stops the timeout path from masking almost every real result. Proper
+fixes (parallelizing independent reasoning-Crew tasks, trimming prompts,
+reconsidering per-agent model tiers) remain open, see backend.md.
 """
 
 from __future__ import annotations
@@ -52,8 +65,9 @@ from app.schemas.task_outputs import (
 
 logger = logging.getLogger(__name__)
 
-# sad.md §7: "Flow-level max_execution_time set to 10s (2x the p95 target)".
-MAX_EXECUTION_TIME_SECONDS = 10
+# sad.md §7 pins 10s (2x the p95 target); raised to 30s as a documented
+# deviation — see module docstring "DEVIATION FROM SAD §7" above.
+MAX_EXECUTION_TIME_SECONDS = 30
 
 ESCALATION_MESSAGE = (
     "Thanks for reaching out. I've flagged this for a team member to review "

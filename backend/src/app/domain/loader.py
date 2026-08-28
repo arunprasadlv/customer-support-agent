@@ -70,6 +70,14 @@ class KBEntry(BaseModel):
     section: str
     keywords: list[str] = Field(default_factory=list)
     content: str
+    example_query: str | None = Field(
+        default=None,
+        description=(
+            "Natural guest-phrased question this entry answers — surfaced by "
+            "GET /taxonomy as a chat quick-reply suggestion. Not used by "
+            "kb_search's retrieval scoring (ADR-005 is unchanged)."
+        ),
+    )
 
 
 class DomainConfig(BaseModel):
@@ -152,6 +160,47 @@ def kb_search(
     scored.sort(key=lambda s: s.relevance_score, reverse=True)
     top = scored[:TOP_N]
     return KBRetrievalResult(retrieved_snippets=top, match_found=len(top) > 0)
+
+
+MAX_DERIVED_KEYWORDS = 5
+
+
+def derive_keywords(
+    intent: str | None, texts: list[str], config: DomainConfig | None = None
+) -> list[str]:
+    """Deterministically derive KB retrieval keywords for a candidate entry
+    when none were supplied — no LLM call, same "fully explainable" spirit
+    as `kb_search` itself (ADR-005).
+
+    Intersects `intent`'s taxonomy keyword hints (`domain_config.json`'s
+    `taxonomy[].keywords` — the same list already primes `query_classifier`
+    to recognize a topic) against `texts` (typically the original guest
+    query plus the operator's resolution text), keeping only the taxonomy
+    keywords that literally appear (case-insensitive substring) in that
+    combined text. This guarantees every keyword returned here will
+    actually match a future guest query containing it, since it's the exact
+    same substring check `kb_search` performs at retrieval time.
+
+    Capped at `MAX_DERIVED_KEYWORDS` (5) — ADR-005's relevance floor is
+    `matched / len(entry.keywords) >= 0.20`, so a single future match needs
+    `len(entry.keywords) <= 5` to ever clear it; a longer derived list would
+    silently dilute a real match below the floor (the exact bug fixed in
+    kb-checkin-001/kb-checkin-002/kb-room-002 — see domain_config.json's
+    history). Returns `[]` if `intent` doesn't match a taxonomy entry (or is
+    `None` — e.g. a diagnostic-halt/timeout original interaction with no
+    classified intent) or if none of that intent's keywords appear in
+    `texts`; callers should treat an empty result as "could not auto-derive
+    anything useful," not an error.
+    """
+    if not intent:
+        return []
+    config = config or get_domain_config()
+    taxonomy_entry = next((t for t in config.taxonomy if t.intent == intent), None)
+    if taxonomy_entry is None:
+        return []
+    combined_text = " ".join(texts).lower()
+    matched = [kw for kw in taxonomy_entry.keywords if kw.lower() in combined_text]
+    return matched[:MAX_DERIVED_KEYWORDS]
 
 
 def validate_config_file(

@@ -194,6 +194,46 @@
   margin: 0 0 0.25rem 0;
 }
 
+/* Quick-reply chips (taxonomy categories -> common questions,
+   frontend.md §12) — reuses the assistant chat-bubble shell with a
+   labeled button group in place of a lone <p>. */
+.chat-bubble--options {
+  max-width: 90%;
+}
+
+.quick-reply-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0.35rem 0 0.5rem 0;
+}
+
+.quick-reply-chip {
+  /* SC 1.4.3 Contrast (Minimum): #2563eb text on white measures ~5.17:1.
+     SC 1.4.11 Non-text Contrast: this is an interactive control (a real
+     <button>), not decoration, so — unlike the #d0d0d0 panel/card
+     borders elsewhere in this app (frontend.md §9.6, explicitly not
+     extended here) — its border is held to the 3:1 minimum. #6b7280
+     (the existing form-field-border token, already verified at ~4.6:1
+     against #fafafa in §8) measures ~4.83:1 against this chip's white
+     background — comfortably clears 3:1. */
+  background: #ffffff;
+  border: 1px solid #6b7280;
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  color: #2563eb;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.quick-reply-chip:hover {
+  /* #2563eb on #eff6ff measures ~4.75:1 — still passes 4.5:1. */
+  background: #eff6ff;
+}
+
 .chat-input {
   display: flex;
   gap: 0.5rem;

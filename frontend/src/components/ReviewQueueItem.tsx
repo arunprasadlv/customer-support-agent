@@ -30,6 +30,11 @@ export default function ReviewQueueItem({
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState(entry.proposedTitle);
   const [draftContent, setDraftContent] = useState(entry.proposedContent);
+  // Comma-separated text, not a tag-input widget — simplest control that
+  // still lets a Reviewer supply a real string[] on submit. Almost always
+  // starts empty (EscalationResolutionFlow never fills candidate_keywords
+  // in), which is exactly the retrievability gap this field exists to fix.
+  const [draftKeywords, setDraftKeywords] = useState(entry.keywords.join(", "));
 
   // Short, human-readable label used to disambiguate this item's
   // buttons from every other item's identically-worded Approve/Edit/
@@ -45,14 +50,24 @@ export default function ReviewQueueItem({
       // Cancel: discard the in-progress draft, revert to the stored values.
       setDraftTitle(entry.proposedTitle);
       setDraftContent(entry.proposedContent);
+      setDraftKeywords(entry.keywords.join(", "));
     }
     setIsEditing((prev) => !prev);
+  }
+
+  function parseDraftKeywords(): string[] {
+    return draftKeywords
+      .split(",")
+      .map((keyword) => keyword.trim())
+      .filter((keyword) => keyword.length > 0);
   }
 
   function handleApprove() {
     onApprove(
       entry.id,
-      isEditing ? { title: draftTitle.trim(), content: draftContent.trim() } : undefined,
+      isEditing
+        ? { title: draftTitle.trim(), content: draftContent.trim(), keywords: parseDraftKeywords() }
+        : undefined,
     );
   }
 
@@ -88,11 +103,34 @@ export default function ReviewQueueItem({
                   disabled={busy}
                 />
               </div>
+              <div className="review-item__field">
+                <label htmlFor={`rq-keywords-${entry.id}`}>Keywords (comma-separated)</label>
+                <input
+                  id={`rq-keywords-${entry.id}`}
+                  type="text"
+                  value={draftKeywords}
+                  onChange={(event) => setDraftKeywords(event.target.value)}
+                  placeholder="e.g. towels, housekeeping, minibar"
+                  disabled={busy}
+                />
+                <p className="review-item__field-hint">
+                  This entry can only be found later if at least one keyword here matches a
+                  guest's wording — entries approved with no keywords can never be retrieved.
+                </p>
+              </div>
             </div>
           ) : (
             <>
               <p className="review-item__proposed-title">{entry.proposedTitle}</p>
               <p className="review-item__proposed-content">{entry.proposedContent}</p>
+              {entry.keywords.length === 0 ? (
+                <p className="review-item__no-keywords-warning">
+                  No keywords set — this entry will not be retrievable if approved as-is. Use
+                  Edit to add some first.
+                </p>
+              ) : (
+                <p className="review-item__keywords">Keywords: {entry.keywords.join(", ")}</p>
+              )}
             </>
           )}
         </div>

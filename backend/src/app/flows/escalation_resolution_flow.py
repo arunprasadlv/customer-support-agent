@@ -37,6 +37,7 @@ from typing import Any
 
 from crewai.flow.flow import Flow, listen, start
 
+from app.domain.loader import derive_keywords
 from app.persistence.interaction_log import get_interaction_by_id
 from app.persistence.review_queue import record_review_queue_entry
 
@@ -78,9 +79,20 @@ class EscalationResolutionFlow(Flow):
         reshaping — `candidate_intent` is inherited from the original
         interaction's classified intent when available (most escalations
         do have one; the `grounded == false` / timeout-diagnostic paths may
-        not, hence `| None`). `candidate_keywords` starts empty — this
-        phase does not attempt keyword extraction; that is left for the
-        Reviewer to fill in at approval time (Phase 3), not invented here.
+        not, hence `| None`).
+
+        `candidate_keywords` is auto-derived via `domain.loader.
+        derive_keywords` (deterministic, no LLM call) rather than left
+        empty: an empty `keywords` list makes an entry permanently
+        unretrievable by `kb_search` (ADR-005 skips zero-keyword entries
+        outright), so a candidate that goes through an un-edited Approve
+        would otherwise write a live KB row a guest could never actually
+        reach — a real bug this project hit in practice (see backend.md /
+        integration.md's keyword-retrievability writeups). Deriving from
+        the original query + the operator's own resolution text still
+        leaves the Reviewer free to add/edit further at approval time; this
+        just ensures a sensible non-empty starting point instead of a
+        silent dead end.
         """
         original = get_interaction_by_id(resolution["original_inquiry_id"])
         if original is None:
@@ -88,11 +100,15 @@ class EscalationResolutionFlow(Flow):
                 f"No interaction_log record found for id={resolution['original_inquiry_id']!r}"
             )
 
+        candidate_intent = original.get("intent")
         candidate = {
             "original_query_text": original.get("query_text"),
-            "candidate_intent": original.get("intent"),
+            "candidate_intent": candidate_intent,
             "candidate_section": "operator_resolution",
-            "candidate_keywords": [],
+            "candidate_keywords": derive_keywords(
+                candidate_intent,
+                [original.get("query_text") or "", resolution["resolution_text"]],
+            ),
             "candidate_content": resolution["resolution_text"],
         }
         self.state["candidate"] = candidate

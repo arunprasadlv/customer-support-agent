@@ -409,3 +409,238 @@ Seed data: 6 interaction-log records (mix of chat/email, escalated/resolved, PII
 - **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2, react-router-dom ^7.18.2) — no new dependencies added. `npm run build` for TypeScript/build validation; the operator's already-running dev server on `http://localhost:5173` (verified via `curl` before use, no new server started) + `npx @axe-core/cli` 4.13.0 (chrome-headless) for the accessibility check (SS10.8/SS10.9).
 - **Prohibited actions confirmed avoided**: no `fetch`/`axios` call to a real backend endpoint; no changes to `/chat`, `/inbox`, `App.tsx`, `index.css`, or `backend/`; no new UI component library or Tailwind introduced; no real authentication/login UI built (Reviewer-role framing only, SS10.6).
 - **Ambiguity resolved, not silently assumed**: SAD's endpoint list omits a dedicated edit endpoint while PRD requires edit capability — resolved as client-side edit + commit-via-approve (SS10.5), flagged rather than silently built either way.
+
+## 11. `/ops` — Escalated — Needs Resolution (`*develop-fe`, live-wired)
+
+Follow-up action, scoped to closing a real end-to-end gap: `@integration.eng`'s `*integrate-api` (SS10's mock boundary → real calls) left `getInteractions`/`getReviewQueue`/`approveReviewQueueEntry`/`rejectReviewQueueEntry` in `lib/mockOpsData.ts` fully wired to the real FastAPI backend, but nothing in the UI ever called `POST /escalations/{id}/resolve` — the only way to populate the KB Review Queue was a manual `curl`. This action adds the missing UI path: a human sees an escalated interaction, writes a resolution, submits it, and it appears in the (already-built, unchanged) KB Review Queue. Built directly against the real backend from the start — no mock-then-swap cycle, matching the pattern the other four `mockOpsData.ts` functions already established.
+
+### 11.1 What was already in place (not redone)
+
+Verified via a direct read of the repo before making changes: `getInteractions`, `getReviewQueue`, `approveReviewQueueEntry`, `rejectReviewQueueEntry` (`lib/mockOpsData.ts`) and `apiClient.ts`'s `apiFetch` helper already existed and already called the real backend (`@integration.eng`'s work, `project-context/2.build/integration.md`) — read, not modified in behavior. `InteractionLogTable.tsx` and `ReviewQueueItem.tsx` were read for pattern-matching only and are untouched. `/chat`, `/inbox`, and all backend files (`backend/`) are untouched.
+
+### 11.2 Component structure
+
+```
+frontend/src/
+├── lib/mockOpsData.ts                 # + resolveEscalation(interactionId, resolutionText) — new,
+│                                       #   calls real POST /escalations/{id}/resolve directly
+├── components/
+│   ├── EscalationResolutionQueue.tsx  # NEW — owns needs-resolution fetch/compute, resolution
+│   │                                  #   drafts, submit-in-flight state, per-item confirmation
+│   ├── InteractionLog.tsx             # + optional `refreshToken` prop (refetch trigger)
+│   └── ReviewQueue.tsx                # + optional `refreshToken` prop (refetch trigger)
+├── styles/ops.css                    # + .escalation-queue*/.escalation-item* rules
+└── routes/Ops.tsx                    # + <EscalationResolutionQueue> section, `refreshToken`
+                                       #   state lifted here, stale header comment corrected
+```
+
+No new type file was needed — `EscalationResolutionQueue.tsx` reuses the existing `InteractionLogEntry` type from `types/ops.ts` (it only ever renders/submits against entries already shaped that way); no new backend query or type was introduced (per the operator's instruction to compute "needs resolution" client-side from data already fetched elsewhere).
+
+### 11.3 The needs-resolution rule — judgment call recorded
+
+Per the operator's explicit specification (not left to independent judgment, but recorded here per this section's `*develop-fe` convention of writing up every non-trivial rule): an interaction is "Escalated — Needs Resolution" iff `outcome === "escalated"` AND no review-queue entry exists with `sourceInteractionId` equal to that interaction's `id`, regardless of that entry's `status` — pending, approved, *and* rejected all count as "already handled." This was deliberately not narrowed to "no *pending* entry," because narrowing it that way would resurrect a rejected item back into the needs-resolution list, silently inviting a second resolution submission for an interaction a Reviewer already made a decision about. Computed entirely client-side in `EscalationResolutionQueue.tsx` by cross-referencing `getInteractions()` and `getReviewQueue()` (a `Set` of `reviewQueue.map(e => e.sourceInteractionId)`, filtered against `outcome === "escalated"` interactions) — no new backend query, matching the task's explicit instruction.
+
+One related judgment call *was* left open by the backend and is called out, not silently worked around: `POST /escalations/{id}/resolve` has no server-side check that `{id}`'s interaction actually has `outcome === "escalated"` (see `main.py`'s `resolve_escalation` docstring/backend.md) — a resolution could technically be submitted against a `"responded"` interaction if called directly. This UI never exposes that path (only escalated-and-unresolved interactions are ever offered a Submit button), so the gap is inert from this component's surface, but it remains a backend-side gap, out of this action's scope to fix (per the operator's instruction).
+
+### 11.4 The refresh problem — resolution recorded
+
+`InteractionLog.tsx` and `ReviewQueue.tsx` each fetch once on mount via `useEffect(() => {...}, [])`, with no built-in way to learn a sibling section changed server state. Resolved with a `refreshToken` counter lifted to `Ops.tsx`: `EscalationResolutionQueue` accepts an `onResolved` callback, called once after a successful `resolveEscalation`, which bumps `refreshToken` in `Ops.tsx`; `refreshToken` is passed as a new **optional** prop to all three sections (`InteractionLog`, `EscalationResolutionQueue`, `ReviewQueue`) and added to each one's existing fetch `useEffect`'s dependency array. This is additive only — `InteractionLog`/`ReviewQueue`'s existing fetch/loading/error logic, JSX, and all other props/behavior are unchanged; the prop is optional specifically so neither component's default (no-prop) behavior changes for any other caller. `EscalationResolutionQueue` also depends on its own `refreshToken` prop (so it, too, refetches if some other future action bumps the counter), even though nothing currently mutates review-queue/interaction state from outside this component besides its own submit action.
+
+One consequence, called out rather than silently accepted: `InteractionLog`/`ReviewQueue`'s `isLoading` state is only ever set back to `true` on the very first mount (existing behavior, unchanged) — a `refreshToken`-triggered refetch updates the underlying data in place without re-showing a "Loading…" message. This was judged acceptable (the refetch is near-instant against a local dev backend, and re-flashing a loading state on every sibling action would be more visually disruptive than a silent data swap) but is flagged here as a deliberate trade-off, not an oversight.
+
+### 11.5 How to demo the flow
+
+1. Trigger an escalation via `/chat` (e.g. "this is unacceptable, I want to speak to a manager") or `/inbox` email compose, or use an already-escalated interaction.
+2. Navigate to `/ops` — the interaction appears under **Escalated — Needs Resolution**, showing its original query text.
+3. Type resolution text into the labeled textarea and click **Submit Resolution** (`aria-label="Submit resolution for: <query excerpt>"`, disambiguating this button from every other item's identically-worded button). The `<fieldset>` disables during the in-flight request.
+4. On success: a `role="status" aria-live="polite"` confirmation appears ("Resolution submitted for "<excerpt>" — now awaiting Reviewer decision in the KB Review Queue."), the item disappears from the needs-resolution list, and — because `onResolved` bumped `refreshToken` — the **KB Review Queue** section below refetches and shows the new candidate as a pending item, with no page reload.
+5. Approving that candidate in the (unchanged) KB Review Queue writes it to the live KB, exactly as before.
+
+Verified as a real round trip against the live backend (SS11.7) — not just read through.
+
+### 11.6 Accessibility approach
+
+Same WCAG 2.2 AA bar and same reused tokens as SS10.8 — no new colors introduced:
+- `#2563eb`/`#ffffff` primary-button pairing, reused for Submit Resolution.
+- `#6b7280` field border, reused for the resolution `<textarea>`.
+- `#d0d0d0` decorative card border, reused for `.escalation-item` (same "decorative, not a required-contrast UI component" reading as `.review-item`/`.ops-table-wrapper`, SS10.8/SS9.6).
+- `#6b3d00` reused for the per-item submit-error text (`role="alert"`) — same token already verified at ~9.16:1 on white (SS10.8).
+- Real `<label htmlFor>` on the resolution textarea (unique per-item id, `escalation-resolution-${entry.id}`), not placeholder-only — same convention as `EmailComposeForm.tsx`/`ReviewQueueItem.tsx`'s edit fields.
+- `aria-label` on the Submit button disambiguates repeated "Submit Resolution" text across multiple items — same pattern as `ReviewQueueItem.tsx`'s Approve/Edit/Reject `aria-label`s.
+- `<fieldset disabled>` while the submit request is in flight — same pattern as `ReviewQueueItem.tsx`.
+- `role="status" aria-live="polite"` for the success confirmation (matches `ReviewQueue.tsx`'s pattern); a separate per-item `role="alert"` for submit failures (matches the urgency framing already used for `loadError` paragraphs in `InteractionLog.tsx`/`ReviewQueue.tsx`).
+- Global `:focus-visible` ring, skip-link, `prefers-reduced-motion` reset — inherited from the existing shell, nothing new needed.
+
+**Verification**: `npx @axe-core/cli http://localhost:5173/ops` (axe-core 4.13.0, chrome-headless) — **0 violations**, run against the live page with real escalated/resolved data present (not an empty-state-only check). Manual NVDA/JAWS/VoiceOver pass not performed — same pre-existing gap as SS8/SS9/SS10 (no Windows/macOS AT available in this execution environment).
+
+### 11.7 Verification performed (real round trip, no new mock layer)
+
+Both backend (`:8000`) and frontend (`:5173`) were already running; confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl http://localhost:5173/` (`200`) before starting anything.
+
+1. `POST /chat` with `"this is unacceptable, I want to speak to a manager right now"` → `{"escalated": true}`.
+2. `GET /interactions`, sorted by `created_at` → confirmed the new row (`e2c71434-cc2a-4f70-a317-d82c01440451`) has `outcome: "escalated"`.
+3. `GET /review-queue` → confirmed no entry with `original_inquiry_id` equal to that id yet (needs-resolution condition holds).
+4. `POST /escalations/e2c71434-cc2a-4f70-a317-d82c01440451/resolve` with `{"resolution_text": "..."}` (the exact body shape `resolveEscalation` sends) → `{"status": "queued", "review_queue_id": "f752e5dd-..."}`, matching `resolveEscalation`'s expected response shape exactly.
+5. `GET /review-queue` → confirmed the new entry exists with `status: "pending"` and `original_inquiry_id` pointing back at the resolved interaction.
+6. `POST /review-queue/f752e5dd-.../approve` → `200`, returned a `kb_entry_id`, confirming the live KB write path (unchanged, `@integration.eng`'s existing work) still fires correctly for an entry that originated through this new path.
+7. `GET /review-queue` again → confirmed `status: "approved"` and that the interaction still correctly counts as "already handled" (would not reappear in needs-resolution).
+8. `npx @axe-core/cli http://localhost:5173/ops` against the live page (with the above data present) — 0 violations.
+9. `npm run build` (`tsc -b && vite build`) — succeeded, no TypeScript errors (10.18 kB CSS, 253.84 kB JS for the combined `/chat` + `/inbox` + `/ops` bundle).
+
+Steps 1–7 exercise the exact HTTP contract `resolveEscalation`/`getInteractions`/`getReviewQueue`/`approveReviewQueueEntry` use (same paths, methods, and body/response shapes read directly from `mockOpsData.ts`), confirming the UI code's real backend calls behave as coded, in addition to the axe-core pass confirming the component tree itself renders and is accessible against the live page.
+
+## Sources (§11 additions)
+
+- `project-context/1.define/prd.md` FR-008 (escalation → KB candidate), FR-014/NFR-008 (Reviewer approve/edit/reject, KB-write gate)
+- `project-context/1.define/sad.md` §4 (`POST /escalations/{id}/resolve` contract)
+- `backend/src/app/main.py` — read directly for the `POST /escalations/{id}/resolve` request/response schema and the `original_inquiry_not_found`/`chat_processing_failed` error envelope, per this action's explicit instruction not to guess the contract
+- `project-context/2.build/frontend.md` §9/§10 (pattern source: mock-boundary write-up style, accessibility token reuse, `<fieldset disabled>`/`role="status"` conventions)
+- `project-context/2.build/integration.md` (existing real-backend wiring for `getInteractions`/`getReviewQueue`/`approveReviewQueueEntry`/`rejectReviewQueueEntry`/`apiFetch`, read but not modified)
+- Repo state at time of this action: `lib/mockOpsData.ts` already had four real-backend functions and no `resolveEscalation`; no `EscalationResolutionQueue.tsx` existed before this action.
+
+## Assumptions (§11 additions)
+
+- "Needs resolution" is computed client-side per SS11.3's rule, exactly as specified by the operator — not an independently invented heuristic.
+- The backend's lack of an `outcome === "escalated"` guard on `POST /escalations/{id}/resolve` (SS11.3) is a known, separately-flagged backend gap; this UI's own design (only ever offering escalated-and-unresolved interactions a Submit control) makes the gap unreachable from this surface, but the gap itself was not fixed here (out of this action's frontend-only scope).
+- `refreshToken`-triggered refetches intentionally do not re-show a "Loading…" state in `InteractionLog`/`ReviewQueue` (SS11.4) — judged an acceptable trade-off for a near-instant local-dev refetch, not revisited if the operator wants a visible refresh indicator later.
+- No optimistic UI update on submit — `EscalationResolutionQueue` removes an item from its local list only after `resolveEscalation` resolves successfully, consistent with this MVP's "server-truth over client-assumed state" posture already established in `mockOpsData.ts`'s approve/reject functions (SS10.7).
+
+## Open Questions (§11 additions)
+
+- Same frontend-test-runner gap as §7/§9/§10 (no Vitest/RTL configured) — `EscalationResolutionQueue.tsx` has no unit/component tests.
+- Same NVDA/JAWS/VoiceOver manual-pass gap as §8/§9/§10 — not available in this execution environment.
+- Whether the backend should reject `POST /escalations/{id}/resolve` for a non-escalated interaction (SS11.3) is flagged again here from the frontend side; no frontend workaround was needed, but the gap remains open at the backend layer.
+- Whether "Escalated — Needs Resolution" should show any indication of *how long* an interaction has been waiting (e.g. relative timestamp, oldest-first sort) is undecided — PRD/SAD don't specify this, and the current list order simply follows `getInteractions()`'s return order; flagged for future polish if the queue grows large.
+
+## Audit (§11 entry)
+
+- **Timestamp**: 2026-08-24
+- **Persona**: `frontend-eng`
+- **Action**: `develop-fe` (Escalated — Needs Resolution, `/ops`)
+- **Resolved runtime**: `crewai` (`aamad.config.yml runtime.target`, no `AAMAD_TARGET_RUNTIME` override observed) — recorded per `aamad-core.md`; not directly load-bearing for this frontend-only UI action, which calls one already-tested backend REST endpoint.
+- **Inputs used**: `project-context/1.define/prd.md` (FR-008, FR-014, NFR-008), `project-context/1.define/sad.md` §4, `backend/src/app/main.py` (`POST /escalations/{id}/resolve` contract, read directly, not guessed), `frontend/src/lib/mockOpsData.ts`/`apiClient.ts` (existing real-backend pattern), `frontend/src/components/InteractionLog.tsx`/`ReviewQueue.tsx`/`ReviewQueueItem.tsx`/`EmailComposeForm.tsx` (pattern source), `project-context/2.build/frontend.md` §8–§10 (accessibility/documentation conventions), `aamad.config.yml`
+- **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new dependencies added. `npm run build` for TypeScript/build validation; the operator's already-running backend (`:8000`) and frontend dev server (`:5173`), verified via `curl` before use, no new servers started; `curl` for the real end-to-end backend round trip (SS11.7); `npx @axe-core/cli` 4.13.0 (chrome-headless) for the accessibility check (SS11.6).
+- **Prohibited actions confirmed avoided**: no new mock layer built for `resolveEscalation` (calls the real backend directly, per explicit instruction); no changes to `/chat`, `/inbox`, `InteractionLogTable.tsx`, `ReviewQueueItem.tsx`, or any `backend/` file; no new UI component library or Tailwind introduced; `InteractionLog.tsx`/`ReviewQueue.tsx` changes are additive-only (one optional prop + one dependency-array entry each), not a rewrite of their existing fetch/error-handling logic.
+- **Ambiguity resolved, not silently assumed**: the needs-resolution rule (SS11.3) and the refresh mechanism (SS11.4) were both explicitly specified by the operator and implemented as specified, not independently reinterpreted; the backend's missing `outcome` guard on resolve (SS11.3) was surfaced as an Open Question rather than fixed (backend changes out of this action's scope).
+
+## 12. `/chat` quick-reply chips — taxonomy -> common questions (`*develop-fe`, live-wired)
+
+Follow-up action closing a real UX gap named directly by the operator: guests previously landed on `/chat` with only the static welcome message and a blank text box, with no hint of what the assistant can help with. `GET /taxonomy` (already built, live, and verified working on the real backend — `backend/src/app/main.py`'s `CommonQuery`/`TaxonomyEntry` models and `get_taxonomy` handler, read directly rather than guessed) already exposes exactly the data needed: 4 domain categories, 3 example questions each. This action wires that endpoint into a two-step quick-reply chip UX inside the existing `ChatWindow`, additive to (never replacing) free-text input.
+
+### 12.1 Component structure
+
+```
+frontend/src/
+├── types/
+│   ├── chat.ts          # + "options" ChatMessageKind, QuickReplyOption (label + baked-in onSelect),
+│   │                     #   ChatMessage.options?/optionsGroupLabel? (both optional, only set for "options")
+│   └── taxonomy.ts       # NEW — CommonQuery/TaxonomyEntry, mirrors main.py's Pydantic models exactly
+├── lib/
+│   └── taxonomyClient.ts # NEW — getTaxonomy(): Promise<TaxonomyEntry[]>, calls real GET /taxonomy via
+│                          #   apiClient.ts's apiFetch (same helper /chat's sendInquiry and /ops's
+│                          #   mockOpsData.ts already use for the real backend)
+├── components/
+│   ├── QuickReplyOptions.tsx  # NEW — renders one "options" ChatMessage: chat-row/BotAvatar shell +
+│   │                          #   intro text + a role="group" pill-button list
+│   └── ChatWindow.tsx         # + taxonomy fetch-on-mount effect, handleCategorySelect, render branch
+└── styles/chat.css            # + .quick-reply-group/.quick-reply-chip/.chat-bubble--options rules
+```
+
+No changes to `MessageBubble.tsx`, `EscalationNotice.tsx`, `ChatInput.tsx`, `mockInquiryClient.ts`, `apiClient.ts`, `/inbox`, `/ops`, or any `backend/` file.
+
+### 12.2 The two-step UX decision
+
+Per the operator's confirmed flow, implemented exactly as specified rather than independently redesigned:
+
+1. **On mount**, `ChatWindow` fetches `GET /taxonomy` once, in a `useEffect` alongside the existing static `WELCOME_MESSAGE`. On success, it appends one new assistant `"options"` message showing the 4 category labels as chips ("Reservations & Booking", "Check-in/Check-out & Billing", "Room Service & Amenities", "General Complaints").
+2. **Clicking a category chip** is pure local UI navigation — no backend call, no guest-transcript entry. It appends a second assistant `"options"` message showing that category's 3 `common_queries` as chips (the `query` text as each chip's label).
+3. **Clicking a common-question chip** sends it exactly as if the guest had typed and submitted it: it is routed through `ChatWindow`'s existing `handleSend(text)` — same guest-bubble append, same `isLoading`/`LoadingIndicator` state, same `sendInquiry` call, same escalation-vs-normal-reply rendering. No parallel send path was built.
+4. **Chip messages are append-only and never removed or collapsed** after use — consistent with the existing `messages` array being append-only everywhere else in this component (welcome message, guest/assistant turns). A guest can scroll back and click category or common-question chips again at any time; no "used" flag or dedup logic was added, per the operator's explicit instruction to keep this simple.
+5. **`ChatInput`/free text is untouched** — chips are additive. A guest can ignore every chip and type anything, exactly as before this action.
+
+**Implementation shape**: a single new `ChatMessageKind = "options"` (not two separate kinds for "category" vs. "query") carrying `options: QuickReplyOption[]`, where each `QuickReplyOption` is `{ id, label, onSelect: () => void }`. The `onSelect` closure is baked in by whichever `ChatWindow` function *builds* the message (the taxonomy-fetch effect for category chips, `handleCategorySelect` for common-question chips) — so `QuickReplyOptions.tsx` itself is a pure, semantics-free renderer that never branches on "is this a category chip or a question chip." This was chosen over two distinct `ChatMessageKind`s (e.g. `"category-options"`/`"query-options"`) because the only actual difference between the two steps is *what a click does*, not how the chip set is rendered or grouped — encoding that difference as data (a closure) on the option itself, rather than as a second message-kind branch in the render loop, kept `ChatWindow`'s render loop at three cases (`"escalation"`/`"options"`/default `"text"`) instead of four, and kept `QuickReplyOptions.tsx` fully reusable for both steps with zero conditional logic inside it.
+
+### 12.3 Visual style — pill/chip buttons, contrast computed (not assumed)
+
+Per the operator-supplied reference: rounded-full ("pill"/stadium) shape, white background, thin ~1px border, blue text, `~0.5rem 1rem` padding, chips wrap in a flex row with `~0.6rem` gap, left-aligned, no drop shadow.
+
+```css
+.quick-reply-chip {
+  background: #ffffff;
+  border: 1px solid #6b7280;
+  border-radius: 9999px;
+  padding: 0.5rem 1rem;
+  color: #2563eb;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.quick-reply-chip:hover {
+  background: #eff6ff;
+}
+```
+
+**Colors reused, not invented** (per instruction): `#2563eb` (this app's established primary blue — Send button, guest bubble background) for chip text; `#6b7280` (the existing form-field-border token, `.chat-input input`'s border, already verified at ~4.6:1 against `#fafafa` in §8) for the chip border.
+
+**Contrast computed via the WCAG relative-luminance formula (§8's method), not assumed**:
+
+| Pairing | Ratio | Requirement | Result |
+|---|---|---|---|
+| `#2563eb` text on `#ffffff` chip background | 5.17:1 | SC 1.4.3, ≥4.5:1 (normal text) | Pass |
+| `#2563eb` text on `#eff6ff` hover background | 4.75:1 | SC 1.4.3, ≥4.5:1 | Pass |
+| `#6b7280` border on `#ffffff` chip background | 4.83:1 | SC 1.4.11 Non-text Contrast, ≥3:1 | Pass |
+| (for reference) `#d0d0d0` border on `#ffffff` | 1.54:1 | SC 1.4.11, ≥3:1 | **Fail — not used here** |
+
+The last row is why `#d0d0d0` was rejected for this control despite being an existing "border" token in this app: §9.6 reasoned `#d0d0d0` panel/card borders (`.chat-window`, `.chat-input`, `.review-item`, etc.) as *decorative*, not subject to SC 1.4.11, because they bound non-interactive containers. A quick-reply chip is a real `<button>` — an interactive UI component whose boundary SC 1.4.11 explicitly covers — so that decorative exemption does not apply here and was not extended to it; `#6b7280` was used instead specifically because it passes the 3:1 UI-component minimum where `#d0d0d0` does not (1.54:1, computed above, confirms it would have failed).
+
+### 12.4 Accessibility approach (WCAG 2.2 AA bar, §8's established target)
+
+- Each chip is a real `<button type="button">` (`QuickReplyOptions.tsx`), not a styled `<div>`/`<a>` — SC 4.1.2, 2.1.1.
+- Each chip set is wrapped in `<div role="group" aria-label="...">` — `"Choose a topic"` for the category set, `"Choose a question"` for a common-question set (`ChatMessage.optionsGroupLabel`, set by whichever `ChatWindow` function builds the message) — so a screen-reader user gets an accessible name for what the button list represents, not just a bare list of buttons.
+- Chip messages append into the existing `.chat-messages` `role="log" aria-live="polite"` region exactly like every other message — same nested-live-region characteristic already flagged in this file's Open Questions (§ Open Questions, "no separate `aria-live` on `LoadingIndicator`" discussion); not a new problem introduced by this action, just consistent with how the rest of the transcript already announces.
+- Reuses the global `:focus-visible` ring (`index.css`) and `prefers-reduced-motion` handling (`.chat-row`'s `message-in` animation, already neutralized under reduced motion) — nothing new needed for either.
+- `QuickReplyOptions.tsx` reuses the exact `chat-row`/`BotAvatar`/`chat-bubble--assistant`/`chat-bubble__meta` shell `MessageBubble.tsx` uses, so it reads as "the assistant sent you some options" with the same visual/semantic pattern as every other assistant turn, differing only in body content (a button group instead of a lone `<p>`).
+
+**Verification performed**: `npx @axe-core/cli http://localhost:5173/chat` (axe-core 4.13.0, chrome-headless) against the initial page load (category chips visible, the default state after the taxonomy fetch resolves) — **0 violations**. Because axe-core CLI has no built-in click/interaction support, a second pass was scripted directly against the same installed axe-core 4.13.0 engine via `selenium-webdriver`/`chromedriver` (both already present as `@axe-core/cli`'s own dependencies, reused rather than adding a new tool): navigate to `/chat`, click a category chip, wait for the resulting common-question chip set to render (and for the `.chat-row` fade-in animation to finish, to avoid a false-positive contrast read mid-transition), then run `axe.run(document)` with both chip sets simultaneously visible in the DOM — **0 violations**. (First run of that second pass, before the animation-settle wait was added, surfaced a transient `color-contrast` finding on the just-appeared chips — traced to auditing mid-fade opacity, not a real static-CSS issue; confirmed by re-running after the 250ms `message-in` animation had time to finish, which passed clean. Recorded here rather than silently discarded, since it could otherwise look like an unexplained pass/fail flip.) Manual NVDA/JAWS/VoiceOver pass not performed — same pre-existing gap as §8/§9/§10/§11 (no Windows/macOS AT available in this execution environment).
+
+### 12.5 Verification performed (real round trip, no mock layer)
+
+Both backend (`:8000`) and frontend (`:5173`) were already running; confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl http://localhost:5173/` (`200`) before starting anything. `curl http://localhost:8000/taxonomy` confirmed the live 4-category/3-question response shape ahead of writing `types/taxonomy.ts`, per the instruction to read the exact contract rather than guess it.
+
+1. Loaded `/chat` in a real (headless Chrome) browser session — the welcome message rendered, followed by a new assistant message with 4 pill chips: "Reservations & Booking", "Check-in/Check-out & Billing", "Room Service & Amenities", "General Complaints".
+2. Clicked "Reservations & Booking" — a new assistant message appeared with 3 pill chips: "What is your cancellation policy?", "Can I change the dates on my reservation?", "Do you have any rooms available this weekend?". The category chip message remained visible above it (not removed/collapsed).
+3. Clicked "Do you have any rooms available this weekend?" — it appeared as a guest message bubble, the loading indicator appeared, and a real assistant reply was returned from the live backend (a genuine `InquiryFlow` response declining to check live availability and redirecting to the booking widget/front desk — not a canned string), rendered as a normal (non-escalation) bubble. Confirms the chip click drove the exact same `handleSend`/`sendInquiry`/`POST /chat` path a manually typed message would.
+4. `npm run build` (`tsc -b && vite build`) — succeeded, no TypeScript errors (10.53 kB CSS, 255.37 kB JS for the combined `/chat` + `/inbox` + `/ops` bundle).
+
+### Sources (§12 additions)
+
+- `backend/src/app/main.py` — `CommonQuery`/`TaxonomyEntry` Pydantic models and `GET /taxonomy` handler, read directly for the exact response shape (not guessed), plus a live `curl http://localhost:8000/taxonomy` round trip confirming it
+- `frontend/src/lib/apiClient.ts` (existing `apiFetch` helper, reused unmodified)
+- `frontend/src/components/ChatWindow.tsx`/`MessageBubble.tsx`/`EscalationNotice.tsx`/`BotAvatar.tsx` (pattern source, read before extending)
+- `project-context/2.build/frontend.md` §8 (contrast-computation method and established tokens), §9.6 (the `#d0d0d0` decorative-border exemption explicitly not extended here)
+- Operator's UX-flow and visual-style specification (two-step category → common-question chip flow; reference-screenshot pill description), given directly in this action's task
+- Repo state at time of this action: `frontend/src/lib/taxonomyClient.ts`, `frontend/src/types/taxonomy.ts`, `frontend/src/components/QuickReplyOptions.tsx` did not exist before this action
+
+### Assumptions (§12 additions)
+
+- The category-chips intro text ("Here are some things I can help with — pick a topic, or just type your question below.") and the per-category intro text (`Common questions about "<label>":`) are new, small pieces of UI copy not dictated verbatim by PRD/SAD/the operator's task — judged in-scope UI polish (same category as the existing static `WELCOME_MESSAGE`), not a fabricated backend response, since neither calls `sendInquiry` or represents an answer to a guest question.
+- If `GET /taxonomy` resolves to an empty array (not currently possible against the live backend's seed config, but not contractually forbidden by the response type), no chip message is appended at all, silently — treated the same as a fetch failure from the guest's perspective (chat remains usable via free text with no visible error), since an empty chip set would be equivalent to no chips.
+- Taxonomy is fetched exactly once per `ChatWindow` mount (no re-fetch/refresh trigger) — matches this app's existing "single guest session per browser tab, no persistence" posture (§ Assumptions) and the fact that the taxonomy is a static, `lru_cache`d, seed-authored config on the backend (per `main.py`'s `get_taxonomy` docstring), not data expected to change within a session.
+
+### Open Questions (§12 additions)
+
+- Same frontend-test-runner gap as §7/§9/§10/§11 (no Vitest/RTL configured) — `QuickReplyOptions.tsx`/`ChatWindow.tsx`'s new taxonomy logic has no unit/component tests.
+- Same NVDA/JAWS/VoiceOver manual-pass gap as §8/§9/§10/§11 — not available in this execution environment.
+- Whether re-clicking an already-used common-question chip a second time (§12.2 point 4 — no "used" state) should visually indicate it was already asked (e.g. a subtle "asked" badge) is undecided; PRD/SAD don't specify this and the operator explicitly asked for the simpler append-only behavior for this MVP pass — flagged here only as a possible future polish item, not a gap in what was asked for.
+
+### Audit (§12 entry)
+
+- **Timestamp**: 2026-08-27
+- **Persona**: `frontend-eng`
+- **Action**: `develop-fe` (quick-reply taxonomy chips, `/chat`)
+- **Resolved runtime**: `crewai` (`aamad.config.yml runtime.target: crewai`, `AAMAD_TARGET_RUNTIME=crewai` observed in the environment, consistent with the config) — recorded per `aamad-core.md`; not directly load-bearing for this frontend-only UI action, which calls one already-tested, already-live backend REST endpoint (`GET /taxonomy`).
+- **Inputs used**: `backend/src/app/main.py` (`CommonQuery`/`TaxonomyEntry`/`get_taxonomy`, read directly), `frontend/src/lib/apiClient.ts` (reused unmodified), `frontend/src/components/ChatWindow.tsx`/`MessageBubble.tsx`/`EscalationNotice.tsx`/`BotAvatar.tsx`/`ChatInput.tsx` (pattern source), `frontend/src/styles/chat.css`/`index.css` (existing token/animation/focus conventions), `project-context/2.build/frontend.md` §8–§11 (accessibility/documentation/contrast-computation conventions), `aamad.config.yml`, the operator's task description (UX flow, visual-style reference, accessibility bar, verification requirements).
+- **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new npm dependencies added to `package.json`. `npm run build` for TypeScript/build validation; the operator's already-running backend (`:8000`) and frontend dev server (`:5173`), verified via `curl` before use, no new servers started; `curl` for the real `GET /taxonomy`/`POST /chat` contract confirmation and round trip; `npx @axe-core/cli` 4.13.0 (chrome-headless) for the static accessibility check; `selenium-webdriver`/`chromedriver` (both already-installed transitive dependencies of `@axe-core/cli`, invoked directly via a scratch Node script — no new dependency installed) plus the same `axe-core` 4.13.0 engine `@axe-core/cli` uses, to drive the click-through category→common-question interaction and audit both chip states plus the real send round trip in one session.
+- **Prohibited actions confirmed avoided**: no changes to `/inbox`, `/ops`, `MessageBubble.tsx`, `EscalationNotice.tsx`, `ChatInput.tsx`, `mockInquiryClient.ts`, `apiClient.ts`, or any `backend/` file; no new UI component library or Tailwind introduced (plain CSS, consistent with `aamad.config.yml ui.visual_style: minimal` and every prior section of this file); no parallel send path built — common-question chips route through the existing `handleSend`.
+- **Ambiguity resolved, not silently assumed**: the single-`"options"`-kind-with-baked-in-`onSelect` shape (§12.2) was chosen over two distinct message kinds as a judgment call explicitly invited by the task ("whatever's cleanest... don't force one message kind to awkwardly serve two different click behaviors"), and the reasoning is recorded in §12.2 rather than left implicit; the `#6b7280`-vs-`#d0d0d0` border choice (§12.3) was computed, not assumed, specifically because the task called out that the existing `#d0d0d0` decorative-border exemption (§9.6) should not be silently extended to an interactive control.

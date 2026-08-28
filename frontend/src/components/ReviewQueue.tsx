@@ -7,6 +7,15 @@ import {
 import type { ReviewQueueDecisionInput, ReviewQueueEntry } from "../types/ops";
 import ReviewQueueItem from "./ReviewQueueItem";
 
+interface ReviewQueueProps {
+  /** Bumped by `Ops.tsx` whenever an escalation resolution is submitted
+   * from `EscalationResolutionQueue` (frontend.md §11), so this component
+   * refetches and picks up the newly-queued candidate entry without a
+   * manual page reload. Optional so this component's own default/
+   * first-mount behavior is unchanged if a caller doesn't pass it. */
+  refreshToken?: number;
+}
+
 /**
  * KB review queue (sad.md SS3 line ~144, PRD FR-014/NFR-008, AC-010/
  * AC-011) — the sole path that can mutate the live knowledge base.
@@ -16,7 +25,7 @@ import ReviewQueueItem from "./ReviewQueueItem";
  * swaps those for real `GET`/`POST` calls without touching this
  * component or ReviewQueueItem.
  */
-export default function ReviewQueue() {
+export default function ReviewQueue({ refreshToken }: ReviewQueueProps) {
   const [entries, setEntries] = useState<ReviewQueueEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -24,16 +33,35 @@ export default function ReviewQueue() {
 
   useEffect(() => {
     let cancelled = false;
-    getReviewQueue().then((data) => {
-      if (!cancelled) {
-        setEntries(data);
-        setIsLoading(false);
-      }
-    });
+    getReviewQueue()
+      .then((data) => {
+        if (!cancelled) {
+          setEntries(data);
+          setIsLoading(false);
+        }
+      })
+      .catch((error: unknown) => {
+        // `@integration.eng`'s `*integrate-api`/`*verify-messageflow`
+        // addition: `getReviewQueue` now hits a real backend and can
+        // reject. Reuses the existing `role="status" aria-live="polite"`
+        // paragraph below (previously only used for approve/reject
+        // confirmations) rather than a new error component — same
+        // "surface it, don't build new error UI" approach as
+        // InteractionLog.tsx.
+        if (!cancelled) {
+          console.error("getReviewQueue failed", error);
+          setStatusMessage(
+            `Could not load the review queue: ${
+              error instanceof Error ? error.message : "unknown error"
+            }`,
+          );
+          setIsLoading(false);
+        }
+      });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshToken]);
 
   const pending = entries.filter((entry) => entry.status === "pending");
   const decided = entries
@@ -51,6 +79,16 @@ export default function ReviewQueue() {
           edited ? " with your edits" : ""
         }.`,
       );
+    } catch (error: unknown) {
+      // Real backend can 404/409/422 here (already-actioned entry,
+      // missing intent/content, etc. — see main.py). Surfaced via the
+      // same status paragraph used for success confirmations above,
+      // rather than a new error UI, so the failure is visible instead of
+      // an unhandled rejection.
+      console.error("approveReviewQueueEntry failed", error);
+      setStatusMessage(
+        `Could not approve this entry: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
     } finally {
       setBusyId(null);
     }
@@ -62,6 +100,11 @@ export default function ReviewQueue() {
       const updated = await rejectReviewQueueEntry(id);
       setEntries((prev) => prev.map((entry) => (entry.id === id ? updated : entry)));
       setStatusMessage(`Rejected: "${updated.proposedTitle}" discarded — knowledge base unchanged.`);
+    } catch (error: unknown) {
+      console.error("rejectReviewQueueEntry failed", error);
+      setStatusMessage(
+        `Could not reject this entry: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
     } finally {
       setBusyId(null);
     }

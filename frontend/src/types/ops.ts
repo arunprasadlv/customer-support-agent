@@ -43,6 +43,15 @@ export interface ReviewQueueEntry {
   originalQuery: string;
   proposedTitle: string;
   proposedContent: string;
+  /**
+   * Retrieval keywords for the live KB entry this becomes on Approve.
+   * `EscalationResolutionFlow` always writes this empty — `kb_search`
+   * (ADR-005) skips any entry with zero keywords outright, so an
+   * un-edited Approve produces a KB write that can never actually be
+   * retrieved by a guest. Almost always `[]` on a pending entry; the
+   * Edit UI is what lets a Reviewer fix that before approving.
+   */
+  keywords: string[];
   status: ReviewQueueStatus;
   /** Set once a decision (approve/reject) has been recorded. */
   decidedAt?: number;
@@ -52,4 +61,5 @@ export interface ReviewQueueEntry {
 export interface ReviewQueueDecisionInput {
   title: string;
   content: string;
+  keywords: string[];
 }

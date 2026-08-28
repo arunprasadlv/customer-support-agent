@@ -42,11 +42,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -56,6 +58,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # dependency (pyproject.toml) but was previously unused.
 load_dotenv()
 
+from app.domain.loader import derive_keywords, get_domain_config  # noqa: E402
 from app.flows.escalation_resolution_flow import (  # noqa: E402
     OriginalInquiryNotFound,
     run_escalation_resolution,
@@ -81,11 +84,88 @@ app = FastAPI(
     ),
 )
 
+# `@integration.eng`'s `*integrate-api` (2026-08-24) — dev-time CORS so the
+# Vite frontend (a different origin: localhost:5173/5174) can call this API
+# from the browser; without this, all frontend fetch() calls fail on the
+# preflight/response before ever reaching a route (curl/server-to-server
+# calls are unaffected — CORS is a browser-enforced restriction only, which
+# is why this gap wasn't visible in @backend.eng's curl-based manual
+# testing). sad.md does not pin an allowed-origins list, so this is a
+# judgment call, documented in integration.md: default to the two Vite dev
+# ports FastAPI/Vite actually use, override via `CORS_ALLOWED_ORIGINS` (a
+# comma-separated list) for any other deployment target rather than
+# hardcoding further origins here. No credentials/cookies are used by this
+# MVP (no auth), so `allow_credentials=False`.
+_default_cors_origins = "http://localhost:5173,http://localhost:5174"
+_cors_allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ALLOWED_ORIGINS", _default_cors_origins).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type"],
+)
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
     """Liveness/readiness probe required by sad.md §5 (DevOps & Deployment)."""
     return {"status": "ok"}
+
+
+class CommonQuery(BaseModel):
+    """One suggested guest-facing question, tied back to the KB entry it
+    answers (so a frontend quick-reply chip can identify which topic it
+    represents without duplicating the phrasing anywhere)."""
+
+    kb_entry_id: str
+    query: str
+
+
+class TaxonomyEntry(BaseModel):
+    """`GET /taxonomy` response item: one taxonomy category plus the
+    suggested questions for it, for a frontend "common queries" quick-reply
+    UI. Read-only, no request body."""
+
+    intent: str
+    label: str
+    common_queries: list[CommonQuery]
+
+
+@app.get("/taxonomy", response_model=list[TaxonomyEntry])
+def get_taxonomy() -> list[TaxonomyEntry]:
+    """Domain taxonomy + per-category suggested questions, for a chat
+    quick-reply UI (e.g. "Reservations & Booking" -> "What is your
+    cancellation policy?"). Deliberately reads the static, `lru_cache`d
+    `domain_config.json` (`get_domain_config()`) directly, NOT the live
+    mutable `knowledge_base` SQLite table `kb_search` uses (`app.persistence.
+    knowledge_base`) — this endpoint surfaces the curated, seed-authored FAQ
+    topics only; Reviewer-approved entries (`POST /review-queue/{id}/
+    approve`) have no `example_query` and are not meant to appear here.
+    KB entries without an `example_query` are simply omitted (a KB entry
+    doesn't have to have one).
+    """
+    config = get_domain_config()
+    result = []
+    for taxonomy_entry in config.taxonomy:
+        common_queries = [
+            CommonQuery(kb_entry_id=kb_entry.kb_entry_id, query=kb_entry.example_query)
+            for kb_entry in config.knowledge_base
+            if kb_entry.intent == taxonomy_entry.intent and kb_entry.example_query
+        ]
+        result.append(
+            TaxonomyEntry(
+                intent=taxonomy_entry.intent,
+                label=taxonomy_entry.label,
+                common_queries=common_queries,
+            )
+        )
+    return result
 
 
 class ChatRequest(BaseModel):
@@ -420,14 +500,15 @@ class ApproveReviewQueueRequest(BaseModel):
     "Approve (optionally edited) -> entry written to live KB". All fields
     are optional overrides; any field left unset falls back to the queued
     candidate's stored `candidate_*` value. `keywords` in particular
-    matters in practice: `EscalationResolutionFlow` always writes
-    `candidate_keywords=[]` (Phase 2 deliberately left keyword-filling for
-    the Reviewer at approval time, per that flow's own docstring) — ADR-005's
-    keyword-overlap scoring means an entry approved with empty keywords can
-    never actually be retrieved (a 0-length `entry.keywords` list is
-    skipped by `kb_search` outright), so a real Reviewer supplying keywords
-    here is how this candidate becomes retrievable at all, not just a nice-
-    to-have edit."""
+    matters in practice: ADR-005's keyword-overlap scoring means an entry
+    approved with empty keywords can never actually be retrieved (a
+    0-length `entry.keywords` list is skipped by `kb_search` outright).
+    `EscalationResolutionFlow` now auto-derives `candidate_keywords` at
+    queue-time (`domain/loader.py::derive_keywords`) so this usually isn't
+    empty to begin with, and this route re-derives as a fallback if it
+    still is after applying any override (see `approve_review_queue_entry`
+    below) — a Reviewer supplying `keywords` here remains the way to
+    override that default, not the only way to get a retrievable entry."""
 
     intent: str | None = None
     section: str | None = None
@@ -483,7 +564,19 @@ def approve_review_queue_entry(id: str, request: ApproveReviewQueueRequest) -> K
 
     kb_entry_id = f"kb-approved-{uuid.uuid4().hex[:12]}"
     final_section = section or "operator_resolution"
-    final_keywords = keywords or []
+    # Safety net, not the primary mechanism: `EscalationResolutionFlow` now
+    # auto-derives `candidate_keywords` at queue-time (domain/loader.py::
+    # derive_keywords), so this branch should rarely fire for new
+    # candidates. It still exists for: candidates queued before that fix,
+    # a Reviewer who explicitly clears the keywords field, or a query/
+    # resolution pairing whose text shares nothing with its intent's
+    # taxonomy keywords. Writing a KB entry with `keywords=[]` makes it
+    # permanently unretrievable (ADR-005, `kb_search` skips zero-keyword
+    # entries outright) — better to attempt one more deterministic
+    # derivation here than silently accept a dead entry.
+    final_keywords = keywords or derive_keywords(
+        intent, [row["original_query_text"] or "", content]
+    )
     entry: dict[str, Any] = {
         "kb_entry_id": kb_entry_id,
         "intent": intent,
