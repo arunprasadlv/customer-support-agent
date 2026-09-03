@@ -20,6 +20,7 @@ from crewai import Crew, Process, Task
 
 from app.agents.config_loader import build_agent, build_task, load_agents_config, load_tasks_config
 from app.domain.loader import DomainConfig
+from app.persistence.trace_log import install_trace_listener
 from app.tools.crewai_tools import kb_search_tool
 
 _REASONING_TASK_ORDER = (
@@ -46,6 +47,11 @@ def build_reasoning_crew(domain_config: DomainConfig) -> tuple[Crew, dict[str, T
     """Build the 4-agent reasoning Crew and return it along with a
     name->Task map (used by the Flow to pull each task's typed
     `output_pydantic` result out of the CrewOutput after kickoff)."""
+    # adapter-crewai.md Logging: install the Trace Log event listener before
+    # kickoff so every task/LLM/tool lifecycle event this Crew emits is
+    # captured — idempotent, safe to call on every build (see trace_log.py).
+    install_trace_listener()
+
     agents_config = load_agents_config()
     tasks_config = load_tasks_config()
 

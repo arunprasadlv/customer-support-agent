@@ -103,6 +103,148 @@
   font-weight: 600;
 }
 
+.ops-indicator--muted {
+  color: #555;
+}
+
+/* --- Interaction trace panel (frontend.md §13) ---
+   "View Trace" toggle button + inline expand-in-place detail row, per
+   `aamad.config.yml ui.prefer_modals: false` (no modal dialog). Reuses
+   the same #6b7280/#2563eb/#b45f18/#fff4e5/#6b3d00 tokens already
+   verified elsewhere on this page — no new colors introduced. */
+
+.ops-table__trace-toggle {
+  background: #ffffff;
+  color: #2563eb;
+  border: 1px solid #6b7280;
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ops-table__trace-toggle:hover {
+  background: #eff6ff;
+}
+
+.ops-table__trace-row td {
+  background: #fafafa;
+  padding: 1rem 1.25rem;
+}
+
+.trace-panel__status {
+  margin: 0;
+  color: #555;
+}
+
+.trace-panel__status--error {
+  color: #6b3d00;
+}
+
+.trace-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.trace-panel__event {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.trace-panel__event--failure,
+.trace-panel__event--latency-fail {
+  /* Same amber warning trio as .ops-indicator--escalated / .review-item__no-keywords-warning
+     — a failed trace step (outcome failure, or a step over the 10s
+     latency ceiling — sad.md §7 NFR-002, *develop-fe follow-up
+     2026-09-01) is a functional warning, not decoration. Both classes
+     can apply to the same row at once (independent signals) without
+     visual conflict, since they resolve to the same background/border. */
+  background: #fff4e5;
+  border-color: #b45f18;
+}
+
+/* --- Per-step latency badges + "slowest step" marker (sad.md §7 NFR-002,
+   *develop-fe follow-up 2026-09-01) — a step's latency pass/fail is a
+   distinct signal from its success/failure outcome above, so it gets its
+   own explicitly-labeled badge ("Latency: Pass"/"Latency: Fail") rather
+   than being merged into the outcome indicator. "Slowest step in this
+   trace" is a third, purely relative signal (the single highest-duration
+   event in the trace) — deliberately NOT amber, since the slowest step
+   can still pass both latency checks; reuses the #2563eb primary-action
+   blue already verified elsewhere on this page (~5.18:1 on white) rather
+   than introducing a new color. */
+
+.trace-panel__duration {
+  font-variant-numeric: tabular-nums;
+  color: #555;
+  white-space: nowrap;
+}
+
+.trace-panel__latency-badge--slow {
+  /* Passes the 10s hard ceiling but misses the 5s target — a lesser,
+     non-failure signal. Reuses the #6b3d00 warning-text token but with
+     no background/border box, so it reads as "worth noting" without
+     competing visually with a real latency-fail/outcome-failure warning
+     (the #b45f18/#fff4e5 boxed pairing above). */
+  color: #6b3d00;
+}
+
+.trace-panel__event--slowest {
+  /* Distinct from failure/latency-fail styling (blue accent, not amber)
+     — "slowest step" is a relative marker, not a pass/fail signal; a step
+     can be the slowest in its trace and still pass both latency checks. */
+  border-color: #2563eb;
+  border-width: 2px;
+}
+
+.trace-panel__slowest-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: #2563eb;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.trace-panel__event-time {
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.trace-panel__event-agent {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.trace-panel__event-type {
+  flex: 1 1 auto;
+  min-width: 12rem;
+}
+
+.trace-panel__event-message {
+  flex-basis: 100%;
+  margin: 0.3rem 0 0 0;
+  color: #1a1a1a;
+}
+
+.trace-panel__event-message--error {
+  color: #6b3d00;
+}
+
 /* --- KB review queue --- */
 
 .review-queue__role-note {

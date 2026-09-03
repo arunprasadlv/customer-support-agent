@@ -13,11 +13,25 @@ from __future__ import annotations
 from crewai import Crew, Process, Task
 
 from app.agents.config_loader import build_agent, build_task, load_agents_config, load_tasks_config
+from app.persistence.trace_log import install_trace_listener
 from app.tools.crewai_tools import pii_detector_tool
 
 
 def build_pii_guard_crew() -> tuple[Crew, Task]:
-    """Build the standalone 1-agent pii_guard Crew."""
+    """Build the standalone 1-agent pii_guard Crew.
+
+    adapter-crewai.md Logging: install the Trace Log event listener before
+    kickoff (idempotent — see trace_log.py). pii_guard runs its own
+    standalone Crew, not a member of reasoning_crew.py's Crew, but CrewAI's
+    event bus is process-global, so this one call covers pii_guard's own
+    task/LLM/tool lifecycle events the same way reasoning_crew.py's call
+    covers its four agents — no separate per-agent hook mechanism is
+    needed. Trace entries for this agent's `pii_detector` tool call are
+    still redacted like every other trace entry (trace_log.py's `_redact`)
+    even though the tool's raw input legitimately carries un-redacted PII.
+    """
+    install_trace_listener()
+
     agents_config = load_agents_config()
     tasks_config = load_tasks_config()
 

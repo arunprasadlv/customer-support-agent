@@ -604,6 +604,91 @@ The last row is why `#d0d0d0` was rejected for this control despite being an exi
 
 **Verification performed**: `npx @axe-core/cli http://localhost:5173/chat` (axe-core 4.13.0, chrome-headless) against the initial page load (category chips visible, the default state after the taxonomy fetch resolves) — **0 violations**. Because axe-core CLI has no built-in click/interaction support, a second pass was scripted directly against the same installed axe-core 4.13.0 engine via `selenium-webdriver`/`chromedriver` (both already present as `@axe-core/cli`'s own dependencies, reused rather than adding a new tool): navigate to `/chat`, click a category chip, wait for the resulting common-question chip set to render (and for the `.chat-row` fade-in animation to finish, to avoid a false-positive contrast read mid-transition), then run `axe.run(document)` with both chip sets simultaneously visible in the DOM — **0 violations**. (First run of that second pass, before the animation-settle wait was added, surfaced a transient `color-contrast` finding on the just-appeared chips — traced to auditing mid-fade opacity, not a real static-CSS issue; confirmed by re-running after the 250ms `message-in` animation had time to finish, which passed clean. Recorded here rather than silently discarded, since it could otherwise look like an unexplained pass/fail flip.) Manual NVDA/JAWS/VoiceOver pass not performed — same pre-existing gap as §8/§9/§10/§11 (no Windows/macOS AT available in this execution environment).
 
+## 13. `/ops` interaction trace panel (`*develop-fe`, live-wired)
+
+Operator-requested follow-up: a dashboard to view the full end-to-end trace for any given interaction — every LLM call and tool call, in order, with success/failure — consuming `@backend.eng`'s already-live `GET /interactions/{id}/trace` (main.py, added same run per its own docstring: "backend half of a trace dashboard"). This is `/ops`-only (the hotel support/ops staff surface); `/chat` and `/inbox` were not touched.
+
+### 13.1 Component structure
+
+```
+frontend/src/
+├── types/ops.ts                       # + TraceEventType, TraceEventOutcome, TraceEvent
+├── lib/mockOpsData.ts                 # + TraceEventDto/InteractionTraceDto, toTraceEvent(), getInteractionTrace(id)
+├── components/
+│   ├── InteractionLogTable.tsx        # MODIFIED — new "Trace" column, per-row "View Trace"/"Hide Trace"
+│   │                                  #   toggle (Set<string> expandedIds, not a single id — more than one
+│   │                                  #   row's trace can be open at once), a second <tr> (Fragment-wrapped,
+│   │                                  #   colSpan across all columns) rendered only while that row is expanded
+│   └── InteractionTracePanel.tsx      # NEW — mounted only while its row is expanded; owns its own
+│                                       #   loading/error/empty-trace state and the GET call itself
+└── styles/ops.css                     # + .ops-table__trace-toggle/.ops-table__trace-row, .trace-panel__*
+```
+
+### 13.2 Why an expand-in-place row, not a modal
+
+`aamad.config.yml`'s `ui.prefer_modals: false` rules out a dialog; a second `<tr>` (rendered from the same component as a `Fragment` wrapping both rows, so React's `key` and the table's DOM structure stay a single valid `<tbody>`) keeps the trace visually anchored to its row, matches `InteractionLogTable`'s existing "real semantic `<table>`" posture, and needs no new dependency — the toggle is plain `useState`, same as every other piece of local UI state on this page (`ReviewQueueItem`'s `isEditing`, `EscalationResolutionQueue`'s per-item resolution drafts).
+
+### 13.3 Lazy fetch — only expanded rows call the backend
+
+`InteractionTracePanel` is conditionally rendered (`{isExpanded && (...)}` in `InteractionLogTable`), so its `useEffect`-driven fetch only fires once a row is actually expanded — collapsing a row unmounts the panel, re-expanding remounts (and refetches) it. No row's trace is fetched up front; a log with 40 rows makes zero `/trace` calls until a user clicks "View Trace" on one of them (verified directly — see §13.6).
+
+### 13.4 Rendering contract — human-readable, three explicit states, no color-alone signaling
+
+- **Event-type labels**: the raw backend `event` values (`task_started`, `llm_call_completed`, `tool_call_error`, etc.) are never shown verbatim — `EVENT_TYPE_LABELS` in `InteractionTracePanel.tsx` maps each to a short human label ("Task started", "LLM call", "Tool call"), appended with a truncated (first-line, 80-char-capped) `task_name` for context. `task_name` on the wire is CrewAI's full task instruction text (often prompt-length, multi-line — confirmed directly against the live backend, see §13.6), not a short label, so truncating only the *display* string (never the underlying `TraceEvent.taskName` field) was necessary to keep one event row scannable.
+- **Outcome**: three states per event, not two — `success` (✓ "Success" + `detail` text if present), `failure` (⚠ "Failure" + `error` text, styled with the same amber `.ops-indicator--escalated`-family tokens already used for the Interaction Log's own "Escalated" outcome — a failed trace step is a real functional warning, not decoration), and `null` ("… In progress" — e.g. a `task_started` event has no outcome yet per the backend's own schema comment, `# null only for task_started`). Icon + text label on every state; no reliance on color alone (`.ops-indicator` convention, unchanged from the existing Interaction Log columns).
+- **Three panel-level states**: loading (`"Loading trace…"`), a real fetch error (`role="alert"`, distinct copy: `"Could not load the trace: ..."`, thrown `ApiError`/network failure surfaced the same way `InteractionLog.tsx` already handles its own fetch error), and a valid empty trace (`"No trace recorded for this interaction."`, plain status text, not an error) — the last one is the 200-with-`events: []` case the backend contract calls out explicitly (an interaction that failed before the reasoning Crew ever ran, or predates trace-event correlation). `getInteractionTrace` lets a 404 (`interaction_not_found`) surface as a thrown error unchanged, same as every other `mockOpsData.ts` call — the panel's error path handles it, nothing swallows it earlier.
+- **Semantic structure**: the trace is an `<ol>` (order is meaningful — chronological, already sorted server-side, no client re-sort), one `<li>` per event; the toggle is a real `<button type="button">` with `aria-expanded` and `aria-controls` pointing at the detail row's `id`, plus an `.sr-only`-suffixed accessible name naming which interaction it targets (mirrors `ReviewQueueItem`'s per-item `aria-label` disambiguation convention, since every row's button would otherwise read identically as "View Trace" to a screen-reader user navigating by role).
+
+### 13.5 Judgment calls recorded
+
+- `expandedIds` as a `Set<string>` rather than a single `expandedId: string | null` — the task description said "the one(s) currently expanded" (plural allowed); a `Set` costs nothing extra in complexity and avoids an arbitrary one-row-at-a-time restriction the backend contract/PRD never asked for.
+- Re-fetch on every expand (no cache across collapse/re-expand cycles) — chosen for simplicity and consistency with this page's existing "server-truth over client cache" posture (`approveReviewQueueEntry`/`rejectReviewQueueEntry` already re-fetch rather than assume), not because caching was ruled out; flagged under Open Questions below as a possible future optimization if trace panels are opened/closed frequently against a slow backend.
+- `task_name` truncation is presentation-only (`shortTaskName()` in `InteractionTracePanel.tsx`) — the `TraceEvent.taskName` field itself is never truncated, so nothing is lost for a future feature (e.g. a "full task text" expansion) that might want the untruncated value.
+
+### 13.6 Verification performed (real round trip, no mock layer)
+
+Both backend (`:8000`, `uvicorn app.main:app --app-dir src`) and frontend (`:5173`, `npm run dev`) started fresh for this verification (neither was already running) and confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl -o /dev/null -w "%{http_code}" http://localhost:5173/` (`200`) before proceeding.
+
+1. `npm run lint` (`oxlint`) — clean, no findings.
+2. `npm run build` (`tsc -b && vite build`) — succeeded, no TypeScript errors (11.91 kB CSS, 260.07 kB JS for the combined `/chat` + `/inbox` + `/ops` bundle).
+3. `curl http://localhost:8000/interactions` confirmed real seed rows exist (40 total); `curl http://localhost:8000/interactions/{id}/trace` against one of them returned `{"interaction_id": "...", "events": []}` — this repo's existing seed data predates the trace-correlation feature, so every pre-existing row has an empty trace. To verify the populated-trace render against real data (not fabricated), sent one live `POST /chat` request (`"What time is check-in?"`) through the real `InquiryFlow`/reasoning Crew, then fetched that new interaction's `/trace` — the real backend returned 19 chronologically-ordered events (`task_started` → `llm_call_completed` → `tool_call_finished` → `task_completed`, repeated across the PII-guard, classification, KB-retrieval, sentiment, and response-composition tasks), confirming the contract exactly as documented (task_name = full task instruction text, agent_role null on task-level events, present on LLM/tool-level events).
+4. Drove `/ops` in a real (headless Chromium, Playwright 1.62) browser session against the two running dev servers: loaded `/ops`, clicked "View Trace" on the row for the live `"What time is check-in?"` interaction — `aria-expanded` flipped to `"true"`, 19 `.trace-panel__event` items rendered in order, 0 styled as failures (correctly — all 19 were real successes), 0 browser console errors. Screenshot confirmed timestamp/agent/human-readable step label/outcome/detail rendering matches §13.4's contract exactly (e.g. "LLM call — Call the `pii_detector` tool exactly once on the following raw inqu…" with a ✓ Success indicator and the raw tool-call JSON as `detail`).
+5. Clicked "View Trace" on a second (pre-existing, empty-trace) row in the same session — rendered `"No trace recorded for this interaction."`, confirmed distinct from both the loading and error states, not mistaken for a failure.
+6. Verified the failure-styled path (no real failed interaction exists in this seed data, and deliberately not fabricating a backend failure just to screenshot one): intercepted the `GET /interactions/*/trace` network call in the same Playwright session with a synthetic single-event `outcome: "failure"` response and confirmed `.trace-panel__event--failure` styling (amber background/border) plus the ⚠ "Failure" icon+text and the `error` string rendering — confirms the CSS/conditional-render path this repo's own data cannot currently exercise, without touching any real backend/app code to force a failure.
+7. Both dev servers (the ones started fresh for this verification, PIDs confirmed via `Get-NetTCPConnection` on ports 8000/5173) were stopped afterward, returning the environment to its pre-verification state.
+
+### Sources (§13 additions)
+
+- `backend/src/app/main.py` — `TraceEvent`/`InteractionTraceResponse` Pydantic models and `GET /interactions/{id}/trace` handler, read directly for the exact response shape (not guessed)
+- `backend/src/app/persistence/trace_log.py` — read directly to confirm event semantics (which fields are null for which event types, e.g. `outcome: null only for task_started`, and that `task_name` carries full task instruction text, not a short label) before designing the human-readable label mapping
+- `frontend/src/components/InteractionLogTable.tsx`/`InteractionLog.tsx`/`ReviewQueueItem.tsx` (pattern source for the table/row/toggle/fetch-state conventions, read before extending)
+- `frontend/src/lib/mockOpsData.ts`/`apiClient.ts` (existing Dto/mapper/`apiFetch` convention, followed exactly for `getInteractionTrace`)
+- `aamad.config.yml` (`ui.prefer_modals: false`, load-bearing for the expand-in-place vs. modal decision)
+- Live round trip against the real backend (`GET /interactions`, `GET /interactions/{id}/trace`, `POST /chat`) and a real Playwright browser session against the real frontend dev server, per §13.6
+- Repo state at time of this action: `frontend/src/components/InteractionTracePanel.tsx` did not exist before this action
+
+### Assumptions (§13 additions)
+
+- "The one(s) currently expanded" was read as permitting more than one row's trace open at once (a `Set`, not a single `expandedId`) — PRD/SAD don't specify a one-at-a-time constraint, and this table has no other single-selection precedent to match.
+- Re-fetching a row's trace on every expand (rather than caching across collapse/expand cycles within one page load) was judged acceptable for this MVP's scale (per setup.md's existing "tiny log volume" framing, reused from `trace_log.py`'s own reasoning) — not a hard requirement from PRD/SAD either way.
+- No client-side re-sort of `events` — the backend contract already guarantees chronological order server-side; trusting that rather than adding a redundant client-side sort.
+
+### Open Questions (§13 additions)
+
+- Same frontend-test-runner gap as §7/§9/§10/§11/§12 (no Vitest/RTL configured) — `InteractionTracePanel.tsx`/`InteractionLogTable.tsx`'s new expand/fetch logic has no unit/component tests.
+- Same NVDA/JAWS/VoiceOver manual-pass gap as §8/§9/§10/§11/§12 — not available in this execution environment.
+- Whether trace fetches should be cached across collapse/re-expand within one page load (avoiding a re-fetch if a user toggles the same row open/closed repeatedly) is undecided — flagged as a possible future optimization, not a gap in what was asked for, since the operator's task did not specify caching behavior either way.
+
+### Audit (§13 entry)
+
+- **Timestamp**: 2026-09-01
+- **Persona**: `frontend-eng`
+- **Action**: `develop-fe` (interaction trace dashboard, `/ops`)
+- **Resolved runtime**: `crewai` (`aamad.config.yml runtime.target: crewai`, consistent with every prior section of this file) — recorded per `aamad-core.md`; not directly load-bearing for this frontend-only UI action, which calls one already-tested, already-live backend REST endpoint (`GET /interactions/{id}/trace`).
+- **Inputs used**: `backend/src/app/main.py` (`TraceEvent`/`InteractionTraceResponse` models and handler, read directly), `backend/src/app/persistence/trace_log.py` (event-semantics reference), `frontend/src/routes/Ops.tsx`, `frontend/src/components/InteractionLog.tsx`/`InteractionLogTable.tsx`/`ReviewQueueItem.tsx` (pattern source), `frontend/src/lib/mockOpsData.ts`/`apiClient.ts` (existing convention, extended not replaced), `frontend/src/types/ops.ts` (extended), `frontend/src/styles/ops.css` (extended, same token set), `aamad.config.yml` (`ui.prefer_modals: false`), the operator's task description (backend contract, accessibility bar, verification requirements).
+- **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new npm dependencies added to `package.json`. `npm run lint` (oxlint) and `npm run build` for static validation; a fresh `uvicorn app.main:app` (backend, `:8000`) and `npm run dev` (frontend, `:5173`) session, both stopped after verification; `curl` for direct contract confirmation (`GET /health`, `GET /interactions`, `GET /interactions/{id}/trace`, `POST /chat`); Playwright 1.62 (chromium, headless, already cached locally — no new install) driven via a scratch Node script for the real click-through render/screenshot verification and the synthetic-failure-response network-intercept check, run from the scratchpad directory, not committed to the repo.
+- **Prohibited actions confirmed avoided**: no changes to `/chat`, `/inbox`, `mockInquiryClient.ts`, `mockEmailClient.ts`, `EscalationResolutionQueue.tsx`, `ReviewQueue.tsx`, or any `backend/` file; no new routing library or state-management dependency introduced (plain `useState`/`useEffect`, consistent with every prior section of this file); no modal dialog built (`aamad.config.yml ui.prefer_modals: false` honored via the expand-in-place `<tr>` pattern); no new CSS file or CSS-in-JS introduced (extended the existing `ops.css`).
+
 ### 12.5 Verification performed (real round trip, no mock layer)
 
 Both backend (`:8000`) and frontend (`:5173`) were already running; confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl http://localhost:5173/` (`200`) before starting anything. `curl http://localhost:8000/taxonomy` confirmed the live 4-category/3-question response shape ahead of writing `types/taxonomy.ts`, per the instruction to read the exact contract rather than guess it.
@@ -644,3 +729,85 @@ Both backend (`:8000`) and frontend (`:5173`) were already running; confirmed vi
 - **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new npm dependencies added to `package.json`. `npm run build` for TypeScript/build validation; the operator's already-running backend (`:8000`) and frontend dev server (`:5173`), verified via `curl` before use, no new servers started; `curl` for the real `GET /taxonomy`/`POST /chat` contract confirmation and round trip; `npx @axe-core/cli` 4.13.0 (chrome-headless) for the static accessibility check; `selenium-webdriver`/`chromedriver` (both already-installed transitive dependencies of `@axe-core/cli`, invoked directly via a scratch Node script — no new dependency installed) plus the same `axe-core` 4.13.0 engine `@axe-core/cli` uses, to drive the click-through category→common-question interaction and audit both chip states plus the real send round trip in one session.
 - **Prohibited actions confirmed avoided**: no changes to `/inbox`, `/ops`, `MessageBubble.tsx`, `EscalationNotice.tsx`, `ChatInput.tsx`, `mockInquiryClient.ts`, `apiClient.ts`, or any `backend/` file; no new UI component library or Tailwind introduced (plain CSS, consistent with `aamad.config.yml ui.visual_style: minimal` and every prior section of this file); no parallel send path built — common-question chips route through the existing `handleSend`.
 - **Ambiguity resolved, not silently assumed**: the single-`"options"`-kind-with-baked-in-`onSelect` shape (§12.2) was chosen over two distinct message kinds as a judgment call explicitly invited by the task ("whatever's cleanest... don't force one message kind to awkwardly serve two different click behaviors"), and the reasoning is recorded in §12.2 rather than left implicit; the `#6b7280`-vs-`#d0d0d0` border choice (§12.3) was computed, not assumed, specifically because the task called out that the existing `#d0d0d0` decorative-border exemption (§9.6) should not be silently extended to an interactive control.
+
+## 14. `/ops` interaction trace panel — per-step latency (`*develop-fe`, follow-up)
+
+Operator-requested follow-up to §13: the backend now attaches per-step latency data (`duration_ms`/`latency_pass`/`meets_target`, sad.md §7 NFR-002's 5s target / 10s hard ceiling) to `llm_call_completed`/`llm_call_failed`/`tool_call_finished`/`tool_call_error` trace events, plus two new bare timing-marker event types, `llm_call_started`/`tool_call_started`. This section extends `InteractionTracePanel.tsx` to surface both. `/chat`, `/inbox`, `InteractionLogTable.tsx`'s row/toggle logic, `ReviewQueue.tsx`, and `EscalationResolutionQueue.tsx` were not touched; no backend file was edited.
+
+### 14.1 Component structure
+
+```
+frontend/src/
+├── types/ops.ts                       # TraceEventType + 2 new literals; TraceEvent + durationMs/latencyPass/meetsTarget
+├── lib/mockOpsData.ts                 # TraceEventDto + duration_ms/latency_pass/meets_target; toTraceEvent() maps them
+├── components/InteractionTracePanel.tsx  # MODIFIED — duration formatting, latency badge, slowest-step marker, start-marker handling
+└── styles/ops.css                     # + .trace-panel__duration, .trace-panel__latency-badge--slow,
+                                        #   .trace-panel__event--latency-fail, .trace-panel__event--slowest,
+                                        #   .trace-panel__slowest-badge
+```
+
+### 14.2 Two badges, not one — Outcome vs. Latency
+
+Latency pass/fail is a genuinely separate signal from the existing success/failure outcome badge: a step can succeed but blow the 10s ceiling, or fail fast well under it. Rather than merge the two into one indicator, the existing outcome badge text was relabeled with an explicit prefix (`"✓ Outcome: Success"` / `"⚠ Outcome: Failure"` / `"… Outcome: In progress"`, was bare `"Success"`/`"Failure"`/`"In progress"` before this action) and a new, separately-rendered latency badge sits alongside it (`"✓ Latency: Pass"` / `"⏱ Latency: Slow (over 5s target)"` / `"⚠ Latency: Fail (over 10s ceiling)"`), plus a plain-text duration (`formatDuration()`: `<1000ms` renders as `"847ms"`, `>=1000ms` as `"2.3s"` — never raw milliseconds). Both badges keep this page's existing icon+text convention; neither relies on color alone. The two are visually adjacent but structurally distinct `<span>`s, so a screen-reader user or a sighted skimmer reads them as two separate facts about the same step, not one conflated status.
+
+### 14.3 Three latency states, one severity ladder
+
+- `latencyPass === false` (over the 10s ceiling): reuses the *exact* amber warning treatment already established for a failed outcome — `.trace-panel__event--latency-fail` now shares `.trace-panel__event--failure`'s `#fff4e5`/`#b45f18` background/border declaration (one CSS rule, two selectors) rather than inventing a second warning palette. Can coexist with an actual outcome failure on the same row (independent booleans) without visual conflict, since both resolve to the same colors.
+- `latencyPass === true, meetsTarget === false` (passes the ceiling, misses the 5s target): a deliberately *lesser* treatment — `.trace-panel__latency-badge--slow` colors just the badge text amber-toned (`#6b3d00`, reused from the same token family), no background/border box — visually distinguishable from a real fail without competing for attention with one.
+- `latencyPass === true, meetsTarget === true`: a plain `✓ Latency: Pass` badge, same default styling as a passing outcome badge.
+
+### 14.4 "Slowest step" is a different concept from "failed latency" — kept visually distinct
+
+The single event with the highest `durationMs` in the trace (computed client-side in the render loop — `Array.forEach` tracking a running max index, `>` not `>=` so ties resolve to the first occurrence; no backend call) gets its own marker: a `#2563eb` blue border (`.trace-panel__event--slowest`, already-verified ~5.18:1 on white, reused from `.ops-table__trace-toggle`'s existing link-blue) plus an explicit `"🐢 Slowest step in this trace"` text badge. This is a *relative-ranking* signal, not a pass/fail one — the slowest step in a trace can still pass both latency checks — so it deliberately never reuses the amber fail palette; verified both ways (§14.6): a slowest step that also fails latency shows amber fill *and* the blue border ring together without visual confusion, and a slowest step that itself passes shows only the blue ring with no amber. When every event's `durationMs` is null (all-task-level or empty trace), the running max index stays `-1` and nothing is marked — no error, per the operator's explicit requirement.
+
+### 14.5 Start markers render as a bare fact, no badge section
+
+`llm_call_started`/`tool_call_started` (`isStartMarker()` in `InteractionTracePanel.tsx`) get a normal chronological `<li>` — timestamp, agent role, and a new human-readable label (`"LLM call started"` / `"Tool call started"`) — but the entire outcome/latency badge block is conditionally skipped for them (`{!isStart && (...)}`), since the backend sends `outcome`/`detail`/`error`/`duration_ms`/`latency_pass`/`meets_target` as `null` for these by contract (they mark a step's start, not its outcome) and rendering a badge for "null outcome" here would misrepresent a normal in-flight marker as the same kind of "in progress" state `task_started` already uses.
+
+### 14.6 Verification performed — real round trip where possible, synthetic where the running backend could not serve it
+
+Reused the operator's already-running dev servers (`backend :8000`, `frontend :5173`, started earlier this session) — did not start, stop, or restart either, confirmed via `curl http://localhost:8000/health` (`{"status":"ok"}`) and `curl -o /dev/null -w "%{http_code}" http://localhost:5173/` (`200`) before proceeding.
+
+1. `npm run lint` (`oxlint`) — clean, no findings.
+2. `npm run build` (`tsc -b && vite build`) — succeeded, no TypeScript errors (12.28 kB CSS, 261.61 kB JS for the combined `/chat` + `/inbox` + `/ops` bundle).
+3. **A genuinely live LLM call was made** — `backend/.env` has a real `ANTHROPIC_API_KEY` — `POST /chat {"message": "What time is check-in?"}` returned a real, non-canned `InquiryFlow` reply. However, fetching that fresh interaction's `GET /interactions/{id}/trace` returned the *pre-latency* event shape: no `duration_ms`/`latency_pass`/`meets_target` keys on any event at all, and no `llm_call_started`/`tool_call_started` events among the 19 returned. Investigated rather than assumed: `git status` shows `backend/src/app/main.py` modified and `backend/src/app/persistence/trace_log.py` untracked (the per-step-latency backend work is uncommitted, on-disk-only) — and the running `uvicorn` process's creation time (18:07:57) predates both files' last-modified time (18:16–18:17). Not run with `--reload`, so the live process is serving the *old* in-memory code and cannot produce the new fields no matter what request is sent to it. Per the operator's explicit instruction not to kill/restart the shared dev servers (another session/user may be relying on them), this was **not** worked around by restarting — flagged below as an Open Question/blocker instead of silently faked.
+4. Given (3), the new UI was verified against **synthetic, network-intercepted `GET /interactions/{id}/trace` responses** (Playwright 1.62.1, headless Chromium — same tool/version as §13.6, resolved via `npx`'s cache since Playwright is not a project dependency; run from the scratchpad directory, nothing committed), matching the exact documented DTO shape (`backend/src/app/main.py`'s `TraceEvent` model field set, `backend/src/app/persistence/trace_log.py`'s docstring, and the boundary values `backend/tests/unit/test_trace_log.py` asserts — 1200/5000/5001/10000/10001ms) — the same "intercept the real page, substitute a synthetic backend response" pattern §13.6 step 6 already established for exercising a state the real seed data couldn't reach. Loaded the real `/ops` page from the real dev server, clicked "View Trace" on a real row, and against the synthetic response confirmed, with 0 browser console errors throughout:
+   - A fast (847ms) passing step rendered exactly two adjacent badges, `"✓ Outcome: Success"` and `"✓ Latency: Pass"`, plus `"Duration: 847ms"`.
+   - A slow-but-passing (6.3s) step rendered `"⏱ Latency: Slow (over 5s target)"` with no amber row background (`trace-panel__event--latency-fail` class absent).
+   - A latency-failing (12.4s) step rendered `"⚠ Latency: Fail (over 10s ceiling)"`, got both `trace-panel__event--failure` and `trace-panel__event--latency-fail` classes, and its computed `background-color` was `rgb(255, 244, 229)` (`#fff4e5`, the existing token, confirmed via `getComputedStyle`, not assumed).
+   - That same 12.4s step (the trace's highest `durationMs`) also carried `trace-panel__event--slowest` and the `"🐢 Slowest step in this trace"` badge; the 847ms step did not.
+   - A second synthetic trace (a 500ms step and a 9.8s step, both passing) confirmed the slowest-marker path independently of failure: the 9.8s step got `trace-panel__event--slowest` and its blue border with *no* amber background — screenshotted for visual confirmation.
+   - `llm_call_started`/`tool_call_started` entries rendered with their new labels and zero `.ops-indicator` elements inside them (confirmed via a DOM count, not eyeballed).
+   - Re-routing the same interception to `{events: []}` and toggling the row closed/re-opened still rendered `"No trace recorded for this interaction."` with no console errors — the "skip without erroring" empty-trace requirement holds with the new code paths in place.
+5. Both dev servers were left running, untouched, per the operator's instruction (not stopped by this action).
+
+### Sources (§14 additions)
+
+- `backend/src/app/main.py` — `TraceEvent` Pydantic model (`duration_ms`/`latency_pass`/`meets_target` fields and their docstring), read directly, plus a live `curl`/`POST /chat` round trip against the running instance
+- `backend/src/app/persistence/trace_log.py` — read directly for event/field semantics (`_latency_fields`, the 5000ms/10000ms thresholds, the two `*_started` marker handlers) — confirmed as uncommitted/untracked working-tree state via `git status`, not assumed to already be live
+- `backend/tests/unit/test_trace_log.py` — boundary-value test cases (1200/5000/5001/10000/10001ms) used as the synthetic-verification fixture values, so the UI check exercises the same boundaries the backend itself is tested against
+- `frontend/src/components/InteractionTracePanel.tsx`/`frontend/src/styles/ops.css` (§13's own prior work, extended not replaced)
+- Live round trip against the real backend (`GET /health`, `POST /chat`, `GET /interactions/{id}/trace`) and a real Playwright browser session against the real frontend dev server, with synthetic network interception per §14.6
+- Repo state at time of this action: `backend/src/app/main.py` modified (uncommitted), `backend/src/app/persistence/trace_log.py` untracked — both predate this frontend action and were read, not written, here
+
+### Assumptions (§14 additions)
+
+- The existing outcome badge text (`"Success"`/`"Failure"`/`"In progress"`) was relabeled to `"Outcome: Success"`/`"Outcome: Failure"`/`"Outcome: In progress"` — a visible behavior change to already-shipped §13 UI, judged necessary (not optional polish) once a second, independently-labeled "Latency: ..." badge sits next to it, per the operator's explicit example phrasing ("Outcome: Success" and "Latency: Pass" as two distinct, clearly-labeled indicators").
+- A tie for "highest `durationMs`" (two events with the exact same value) resolves to whichever occurs first chronologically (strict `>` comparison) — PRD/SAD/the task don't specify tie-breaking and this trace is already chronologically ordered, so "first" is a defensible, deterministic default.
+- "Slow but passing" (`meetsTarget === false`, `latencyPass === true`) severity was implemented as muted badge-text-only styling (no background/border box) rather than, e.g., a lighter-tint box — the task explicitly left the exact treatment to this persona's judgment as long as it read as less severe than an outright fail and used icon+text.
+
+### Open Questions (§14 additions)
+
+- **Blocker for a fully live demo of this feature, not a code gap**: the shared backend dev server process must be restarted to pick up the uncommitted `main.py`/`trace_log.py` changes before `/ops` can show real (non-synthetic) latency data — this action deliberately did not restart it per the explicit instruction not to disrupt the running instance. Whoever owns that restart should re-verify the real round trip once it's safe to bounce the server.
+- Same frontend-test-runner gap as §7/§9/§10/§11/§12/§13 (no Vitest/RTL configured) — the new duration/latency-badge/slowest-step logic in `InteractionTracePanel.tsx` has no unit/component tests.
+- Same NVDA/JAWS/VoiceOver manual-pass gap as §8–§13 — not available in this execution environment; the icon+text/no-color-alone convention was followed but not machine- or AT-verified beyond DOM/contrast checks.
+
+### Audit (§14 entry)
+
+- **Timestamp**: 2026-09-01
+- **Persona**: `frontend-eng`
+- **Action**: `develop-fe` (per-step latency additions to the `/ops` interaction trace panel, follow-up to §13)
+- **Resolved runtime**: `crewai` (`aamad.config.yml runtime.target: crewai`, consistent with every prior section of this file) — recorded per `aamad-core.md`; not directly load-bearing for this frontend-only UI action.
+- **Inputs used**: `backend/src/app/main.py` (`TraceEvent` model, read directly), `backend/src/app/persistence/trace_log.py` (event/field semantics, read directly), `backend/tests/unit/test_trace_log.py` (boundary values reused for synthetic verification), `frontend/src/types/ops.ts`/`frontend/src/lib/mockOpsData.ts`/`frontend/src/components/InteractionTracePanel.tsx`/`frontend/src/styles/ops.css` (§13's existing work, extended), the operator's task description (field contract, badge/severity/slowest-step requirements, accessibility bar, verification requirements).
+- **Tools/versions used**: existing scaffold (Vite v8.2.1, React 19.2.8, TypeScript ~6.0.2) — no new npm dependencies added to `package.json`. `npm run lint` (oxlint) and `npm run build` for static validation; the operator's already-running backend (`:8000`, `uvicorn`) and frontend (`:5173`, `npm run dev`) dev servers, reused as instructed and left running; `curl` for direct contract confirmation (`GET /health`, `POST /chat`, `GET /interactions`, `GET /interactions/{id}/trace`); `git status`/`git log` to establish the uncommitted-backend-code finding; Playwright 1.62.1 (chromium, headless, resolved via `npx`'s package cache — not a project dependency, no `package.json` change) driven via scratch Node scripts (network-route interception, DOM assertions, and element screenshots) from the scratchpad directory, not committed to the repo.
+- **Prohibited actions confirmed avoided**: no changes to `/chat`, `/inbox`, `InteractionLogTable.tsx`'s row/toggle logic, `ReviewQueue.tsx`, `EscalationResolutionQueue.tsx`, or any `backend/` file; no new npm dependency added; no new CSS file or CSS-in-JS (extended the existing `ops.css`); did not kill, restart, or otherwise disrupt the operator's already-running `backend`/`frontend` dev server processes, even though doing so would have enabled a fully live (non-synthetic) verification — the tradeoff and its consequence are recorded above rather than silently worked around.

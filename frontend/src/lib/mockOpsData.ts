@@ -3,6 +3,8 @@ import type {
   InteractionLogEntry,
   ReviewQueueDecisionInput,
   ReviewQueueEntry,
+  TraceEvent,
+  TraceEventType,
 } from "../types/ops";
 
 /**
@@ -17,6 +19,10 @@ import type {
  *       added directly against the real backend, following the pattern
  *       the other four functions already established; no mock-then-swap
  *       cycle for this one.)
+ *   - `GET /interactions/{id}/trace`           -> getInteractionTrace(id)
+ *       (`@frontend.eng`'s `*develop-fe` addition, frontend.md §13 --
+ *       backend contract handed over already-verified; added directly
+ *       against the real endpoint, same pattern as resolveEscalation.)
  *
  * Filename/exports kept as `mockOpsData.ts` — the exact swap point
  * `@frontend.eng` built `InteractionLog.tsx`/`ReviewQueue.tsx`/
@@ -281,4 +287,66 @@ export async function resolveEscalation(
     { method: "POST", body: JSON.stringify({ resolution_text: resolutionText }) },
   );
   return { reviewQueueId: result.review_queue_id };
+}
+
+// ---------------------------------------------------------------------
+// GET /interactions/{id}/trace -> TraceEvent[]
+// ---------------------------------------------------------------------
+
+/**
+ * Raw shape of one event in `GET /interactions/{id}/trace`'s `events`
+ * array. `duration_ms`/`latency_pass`/`meets_target` (`*develop-fe`
+ * per-step-latency follow-up, 2026-09-01, sad.md §7 NFR-002) are present
+ * (non-null) only on `llm_call_completed`/`llm_call_failed`/
+ * `tool_call_finished`/`tool_call_error` records — `null` on every other
+ * event type, per `backend/src/app/main.py`'s `TraceEvent` model.
+ */
+interface TraceEventDto {
+  timestamp: string;
+  event: TraceEventType;
+  task_name: string | null;
+  agent_role: string | null;
+  outcome: "success" | "failure" | null;
+  detail: string | null;
+  error: string | null;
+  duration_ms: number | null;
+  latency_pass: boolean | null;
+  meets_target: boolean | null;
+}
+
+/** Raw shape of `GET /interactions/{id}/trace`'s response body. */
+interface InteractionTraceDto {
+  interaction_id: string;
+  events: TraceEventDto[];
+}
+
+function toTraceEvent(row: TraceEventDto): TraceEvent {
+  return {
+    timestamp: Date.parse(row.timestamp),
+    eventType: row.event,
+    taskName: row.task_name,
+    agentRole: row.agent_role,
+    outcome: row.outcome,
+    detail: row.detail,
+    error: row.error,
+    durationMs: row.duration_ms,
+    latencyPass: row.latency_pass,
+    meetsTarget: row.meets_target,
+  };
+}
+
+/**
+ * Real `GET /interactions/{id}/trace` call for the ops trace panel
+ * (frontend.md §13). Events already arrive in chronological order from
+ * the server — no client-side sort applied. A 404 (`error_code:
+ * "interaction_not_found"`) surfaces as a thrown `ApiError` via
+ * `apiFetch`, same as every other call in this module; the caller
+ * (`InteractionTracePanel.tsx`) is what distinguishes that from the
+ * valid "200 with an empty `events` array" case (an interaction that
+ * failed before the reasoning Crew ever ran) — this function does not
+ * collapse the two.
+ */
+export async function getInteractionTrace(interactionId: string): Promise<TraceEvent[]> {
+  const body = await apiFetch<InteractionTraceDto>(`/interactions/${interactionId}/trace`);
+  return body.events.map(toTraceEvent);
 }

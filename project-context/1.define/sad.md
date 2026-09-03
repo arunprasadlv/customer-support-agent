@@ -56,6 +56,57 @@
 - **Consequences**: Faster and cheaper (no extra LLM calls on the hot path); escalation thresholds become an explicit, testable, tunable value rather than opaque agent judgment — directly supports AC-003 ("never fabricate, always flag clearly"). Trade-off: less flexible than an LLM judging escalation-worthiness in genuinely ambiguous cases.
 - **Status: Confirmed** (stakeholder-affirmed, 2026-08-05) — `escalation_manager`/`interaction_logger` stay deterministic Flow logic. Not revisited based on future QA results; if threshold tuning proves insufficient, the fix is adjusting the threshold values, not converting either into an LLM agent.
 
+---
+
+#### ADR-002 Addendum (2026-09-02): Dispute/Chargeback Escalation Signal
+
+> This is an amendment to ADR-002 above, not a replacement. It is written here, as a dated addendum, deliberately following the SAD-first-then-code sequencing this project requires — see qa.md's finding on the undocumented `MAX_EXECUTION_TIME_SECONDS` change (10→30) as the negative example this addendum is explicitly avoiding: `@backend-eng` implements against this addendum in a follow-up action, not the other way around. No code (`escalation_gate.py`, `inquiry_flow.py`) has been touched as part of writing this.
+
+- **Trigger**: manual dashboard testing (2026-09-02) surfaced a live false negative — a guest message stating "I will dispute that charge" was **not** escalated. All three existing ADR-002 conditions independently missed it: `confidence = 0.92` (well above the 0.70 escalate line), `sentiment_score = 0.70` (below the 0.75 escalate line — polite but firm phrasing, not scored as "angry"), `grounded = true` (a KB entry matched). A dispute/chargeback threat is a Must-escalate case on its own commercial/legal merits, independent of how confident or how angry the message otherwise reads — sentiment score is the wrong proxy for it, and lowering the sentiment threshold generically would over-escalate unrelated mildly-negative messages just to catch this one phrase pattern. The operator decided, after reviewing the alternative of simply lowering `SENTIMENT_ESCALATE_AT_OR_ABOVE`, to add a **dedicated, independent signal** instead.
+
+- **Decision**: add a fourth, independently-evaluated OR'd condition to the escalation gate: a deterministic, pinned-keyword/phrase match for dispute/chargeback language in the guest's message. This preserves ADR-002's core property untouched — the router remains a pure function over typed/derived inputs, **not** an LLM judgment call. No new agent, no new LLM invocation is introduced by this addendum.
+
+  - **Signal name**: `contains_dispute_language` (a boolean-producing check, analogous in spirit to `grounded` — see Function Signature below for where the boolean is computed).
+  - **Runs against**: `redaction.clean_text` **only** — the already PII-redacted guest message already held in `InquiryFlow.state["redaction"]`, per FR-011/ADR-003. It must never run against raw, unredacted text. `clean_text` is available at the point `escalation_gate` is invoked (step 4) even though `evaluate_escalation()` does not currently receive it — see Function Signature below.
+  - **Matching**: case-insensitive substring/word-boundary match against a fixed, pinned phrase list (analogous to how `CONFIDENCE_ESCALATE_AT_OR_BELOW`/`SENTIMENT_ESCALATE_AT_OR_ABOVE` are pinned module-level constants, not runtime-configurable inputs, in `escalation_gate.py`). No LLM call, no fuzzy/semantic matching, no stemming beyond simple case-folding.
+  - **Pinned phrase list** (case-insensitive; match if any phrase is a substring/word-boundary match of `clean_text`):
+    ```
+    "dispute", "chargeback", "charge back", "dispute this charge",
+    "dispute that charge", "dispute the charge", "contest this charge",
+    "contest that charge", "contest the charge", "file a dispute",
+    "file a chargeback", "dispute a charge", "disputing the charge",
+    "disputing this charge"
+    ```
+    Rationale for including the bare word `"dispute"`/`"chargeback"` alongside the longer phrases: a guest is at least as likely to write "I'll have to dispute this" or "this is going to a chargeback" as the fuller phrasing — a bare-word match on these two specific words is low-risk of false-positiving in a hotel-support context (neither word has an unrelated common hotel-support usage), unlike e.g. bare `"charge"` alone, which routinely appears in ordinary non-dispute billing questions ("what will I be charged", "room service charge") and is deliberately **excluded** from this list for that reason.
+
+- **Composition with the existing three conditions**: this is confirmed consistent with ADR-002's existing "any condition true → escalate" design — no reweighting, no compound scoring, no interaction between conditions. The gate becomes:
+
+  ```
+  escalate if:
+      grounded == false
+      OR confidence <= 0.70
+      OR sentiment_score >= 0.75
+      OR contains_dispute_language == true
+  ```
+
+  This directly supersedes §2 step 4's "three independent OR'd conditions" framing (line ~119 above) — it is now **four** independent OR'd conditions; `@backend-eng`'s follow-up action should update that step-4 bullet list itself when the code lands, so §2 and this addendum do not drift the way qa.md flagged for the `MAX_EXECUTION_TIME_SECONDS` value. Likewise, the "Typed Task Outputs" note (§2, "`escalation_gate` (step 4) reads exactly three typed fields...") is superseded: it now reads four inputs — three typed Crew outputs plus one deterministically-derived boolean (see below).
+
+- **New `_escalation_reason()` reason string**: `InquiryFlow._escalation_reason()` (`backend/src/app/flows/inquiry_flow.py`) appends one reason string per triggered condition, matching existing style (`"not_grounded"`, `"low_confidence"`, `"high_frustration"`). Add: **`"dispute_language_detected"`**, appended when `contains_dispute_language(redaction.clean_text)` (or the equivalent boolean, per the chosen signature below) is `true`. This gives the guest-facing/ops-facing escalation reason list a clear, distinct label for this case rather than folding it under `"high_frustration"` (which would misrepresent the actual trigger — this guest may not be scored as angry at all, as the 2026-09-02 case shows).
+
+- **Function signature recommendation**: `evaluate_escalation()` currently takes `(confidence, sentiment_score, grounded)`. Two options were considered:
+  1. Pass the raw redacted text in and check for dispute language *inside* `evaluate_escalation()`.
+  2. Compute the boolean in a small separate pure function (e.g. `contains_dispute_language(text: str) -> bool`) and pass the resulting `bool` into `evaluate_escalation()` as its 4th parameter.
+
+  **Recommended: option 2.** This keeps `evaluate_escalation()` itself a pure function over four scalars (`confidence: float, sentiment_score: float, grounded: bool, dispute_language_detected: bool`) — exactly the shape ADR-002 already relies on for its "directly unit-testable" claim (sad.md §9): threshold-composition logic (`evaluate_escalation`) and phrase-matching logic (`contains_dispute_language`) become two separately, trivially unit-testable functions instead of one function mixing threshold comparisons with string matching. `escalation_gate.py` stays the single pure-function home for the OR-composition; the new phrase-matching function may live in the same module (it has no other caller) but as a distinct top-level function with its own pinned constant (e.g. `DISPUTE_LANGUAGE_PHRASES`), not inlined into `evaluate_escalation()`'s body. `InquiryFlow.escalation_gate()` (the `@router` step in `inquiry_flow.py`) is the call site that computes `contains_dispute_language(redaction.clean_text)` and passes the bool through, mirroring how it already reads `outcome["classification"].confidence` etc. and passes those through today.
+
+- **Consequences**: One additional pinned constant list to maintain alongside the two existing numeric thresholds; no new LLM call, no latency/cost impact (addresses a correctness gap, not a performance one). `contains_dispute_language`'s false-positive/false-negative surface is now a named, testable concern (`@qa-eng` should add fixtures for both: e.g. "I was double-charged for room service" should *not* trigger it, while "I'm going to dispute that charge with my bank" should).
+
+- **Traceability**: FR-006 (escalation), AC-002/AC-003 (correctness of escalation decisions, no-fabrication-adjacent guest-trust behaviors), FR-011/ADR-003 (redacted-text-only guarantee — this addendum's `contains_dispute_language` input is explicitly `clean_text`, never raw text).
+
+**Status: Proposed** — this addendum specifies the SAD-level contract; implementation against it is a separate `@backend-eng` follow-up action (not performed as part of writing this addendum).
+
+---
+
 #### ADR-003: PII Guard is a standalone dedicated agent, run before the reasoning Crew
 
 - **Context**: Stakeholder explicitly required a dedicated PII agent (not a shared utility, decided 2026-08-05). FR-011 requires redaction on "any content passed to the knowledge-retrieval **or LLM** components" — which includes the classifier, not just retrieval/logging.
@@ -116,13 +167,14 @@ Flow (`InquiryFlow`), one instance per inquiry, regardless of channel:
 1. **`@start` — intake_normalize**: receive raw inquiry (chat message or simulated-email submission) → normalize to `{channel, raw_text, sender_id, timestamp}`.
 2. **`@listen` — pii_redact**: `pii_guard` agent redacts/masks PII in `raw_text` → produces `clean_text` and `redaction_actions` (see Typed Task Outputs below). Runs before step 3, no exceptions (FR-011).
 3. **`@listen` — run_reasoning_crew**: `reasoning_crew.kickoff(clean_text, domain_config)` — sequential process, task-context chaining passes `intent` → `retrieved_snippets` → `sentiment_score` → `draft_response` through the four agents in order, each field typed per the Pydantic contracts below.
-4. **`@router` — escalation_gate**: reads `confidence`, `sentiment_score`, `grounded` from step 3's output (see Typed Task Outputs below) and evaluates, in order, three independent OR'd conditions — any one true routes to `escalate`:
+4. **`@router` — escalation_gate**: reads `confidence`, `sentiment_score`, `grounded` from step 3's output plus one deterministically-derived boolean, `dispute_language_detected` (computed by `contains_dispute_language(redaction.clean_text)` — ADR-002 Addendum, 2026-09-02), and evaluates, in order, **four** independent OR'd conditions — any one true routes to `escalate`:
    - `grounded == false` (not tunable — AC-003 mandates escalation over fabrication whenever there's no KB match)
    - `confidence <= 0.70` (classifier confidence at or below this line is not trusted)
    - `sentiment_score >= 0.75` (equivalent to `sentiment_label == "angry"` — see Typed Task Outputs)
+   - `dispute_language_detected == true` (pinned phrase/keyword match against dispute/chargeback language — ADR-002 Addendum, 2026-09-02; see that addendum for the pinned phrase list and rationale)
    - **`escalate` branch** (any condition above true): flag the interaction for simulated human handoff; guest-visible message states this clearly (AC-003). The (simulated) human's resolution is recorded separately once submitted — see the decoupled `EscalationResolutionFlow` below — not blocked on here.
    - **`respond` branch** (else): deliver `draft_response`.
-   - All three numbers are MVP starting values, deliberately simple (independent thresholds, no compound/weighted scoring) and expected to be tuned from `@qa-eng` acceptance results — not a final calibration.
+   - The three numeric thresholds are MVP starting values, deliberately simple (independent thresholds, no compound/weighted scoring) and expected to be tuned from `@qa-eng` acceptance results — not a final calibration. `dispute_language_detected` is a pinned phrase-list match, not a numeric threshold — see ADR-002 Addendum for its own expected-tuning note.
    - **Ordering note**: as documented, this step runs after the full reasoning Crew (including `compose_response_task`) completes. If the §7 Latency Spike shows p95 missing target, fallback (2) there reorders this gate to run before `compose_response_task`, invoking the composer only on the `respond` branch — not applied by default, only on measured evidence.
 5. **`@listen` — deliver_response**: send `draft_response` (or escalation notice) back via the originating channel — chat reply or simulated email reply (FR-005, FR-010, AC-006).
 6. **`@listen` — log_interaction**: always runs (both branches) — persists one interaction-log record: query, classification, sentiment, PII actions taken, outcome (FR-007).
@@ -139,7 +191,7 @@ Every CrewAI `Task` in the reasoning Crew, plus `pii_guard`'s task, binds `outpu
 | `analyze_sentiment_task` (`sentiment_analyzer`) | `SentimentResult` | `sentiment_score: float` (0.0–1.0), `sentiment_label: Literal["neutral","frustrated","angry"]` — boundaries: `neutral` < 0.40, `frustrated` 0.40–0.74, `angry` ≥ 0.75 |
 | `compose_response_task` (`response_composer`) | `ComposedResponse` | `draft_response: str`, `grounded: bool` (false whenever `match_found` was false — structurally enforces AC-003's no-fabrication rule, not just a prompt instruction) |
 
-`escalation_gate` (step 4) reads exactly three typed fields — `confidence: float`, `sentiment_score: float`, `grounded: bool` — nothing else; this closed input set, combined with the pinned thresholds in step 4 (`confidence <= 0.70`, `sentiment_score >= 0.75`, `grounded == false`), is what makes ADR-002's "pure function" claim true in code, not just in the ADR's prose.
+`escalation_gate` (step 4) reads exactly four inputs — three typed Crew output fields (`confidence: float`, `sentiment_score: float`, `grounded: bool`) plus one deterministically-derived boolean (`dispute_language_detected: bool`, computed by `contains_dispute_language(redaction.clean_text)` per the ADR-002 Addendum, 2026-09-02) — nothing else; this closed input set, combined with the pinned thresholds/phrase list in step 4 (`confidence <= 0.70`, `sentiment_score >= 0.75`, `grounded == false`, `dispute_language_detected == true`), is what makes ADR-002's "pure function" claim true in code, not just in the ADR's prose.
 
 `log_interaction_task` maps `draft_response → response_text` and carries `intent`, `confidence`, `sentiment_score`, and a summary of `redaction_actions` through unchanged into the `interaction_log` record (§4/§6) — same field names throughout, no re-mapping/renaming between the Flow, the Crew, and the persisted log.
 
@@ -298,6 +350,8 @@ Phase 1 is the walking skeleton: it is the only phase that touches every archite
 - `.claude/rules/adapter-crewai.md` (YAML config-externalization, sequential-process default, `max_iter`/`max_retry_limit` baselines)
 - Stakeholder decision (2026-08-05): Flow + embedded Crew orchestration, scored against project-derived criteria (ADR-001)
 - `backend/domain_config.json`, `backend/domain_config.schema.json` — seeded/formalized 2026-08-06 per ADR-005
+- Manual dashboard testing finding (2026-09-02): observed false-negative escalation on a dispute-threat guest message — see ADR-002 Addendum
+- `project-context/2.build/qa.md` — provenance-gap finding on the undocumented `MAX_EXECUTION_TIME_SECONDS` deviation, cited in ADR-002 Addendum as the anti-pattern this addendum's SAD-first sequencing deliberately avoids
 
 ## Assumptions
 
@@ -308,6 +362,7 @@ Phase 1 is the walking skeleton: it is the only phase that touches every archite
 - LLM provider is Anthropic (stakeholder-confirmed, 2026-08-05). Specific models are now resolved per agent (ADR-004): `claude-haiku-4-5` for `query_classifier`/`knowledge_retriever`/`pii_guard`, `claude-sonnet-5` for `sentiment_analyzer`/`response_composer`. `.env.example` (to be created in Phase 2 setup) will define `ANTHROPIC_API_KEY`.
 - `backend/domain_config.json` is seeded (2026-08-06) with the 4 FR-013 taxonomy entries and 3 `knowledge_base` entries each (12 total), per ADR-005's shapes; `backend/domain_config.schema.json` updated to formalize those shapes (was previously `"TODO(@backend.eng): shape undefined"`). Keyword lists are a reasonable MVP starting set, not exhaustively tuned — `@backend-eng`/`@qa-eng` may extend them if Phase 1 testing shows real guest phrasing missing common keywords (ADR-005 Consequences already flags this as an expected limitation, not a bug).
 - NFR-002's p95 ≤ 5s target and 10s hard ceiling (§7) are engineering interpretations of PRD's qualitative "a few seconds," not stakeholder-confirmed numbers — reasonable defaults pending the Phase 1 latency spike's actual measurement, not a guarantee the unmodified 5-call pipeline will meet them.
+- ADR-002 Addendum's pinned dispute/chargeback phrase list is a reasonable MVP starting set based on one observed false-negative, not exhaustively tuned — `@qa-eng` may need to extend it the same way ADR-005's KB keyword lists were expected to be extended from real testing (Assumptions above).
 
 ## Open Questions
 
@@ -316,6 +371,11 @@ Carried forward from `prd.md` (unresolved as of this document):
 - Actual budget for the project (timeline confirmed: 5 weeks).
 - Which specific regulation, if any, PII handling must ultimately comply with.
 - Hosting/infrastructure target for MVP — for `@devops-eng` to propose during Phase 3 planning.
+
+New, raised by this round (ADR-002 Addendum, 2026-09-02):
+
+- Should the dispute/chargeback phrase list live in `domain_config.json` instead of a hardcoded Python constant, given other domain-specific values (taxonomy keywords, KB keywords) already live there? Not resolved here — flagged, not decided. Leaning against for now: `domain_config.json`'s existing schema shapes (`taxonomy[].keywords`, `knowledge_base[].keywords`, per ADR-005) are keyed to *intent classification and retrieval*, both inherently domain-specific (a different vertical has entirely different taxonomy); dispute/chargeback language is arguably a cross-cutting compliance/escalation signal that would look similar in most service domains, closer in kind to the pinned numeric thresholds (`CONFIDENCE_ESCALATE_AT_OR_BELOW`, `SENTIMENT_ESCALATE_AT_OR_ABOVE`) than to domain content — and those are Python constants, not config. But this is a judgment call, not settled by anything already in `domain_config.schema.json` (which has no existing "cross-cutting escalation keywords" shape to extend), so `@backend-eng`/`@qa-eng` should weigh in before or during implementation rather than this addendum silently picking a side.
+- What is the intended false-positive tolerance for `contains_dispute_language`? E.g. should escalating on the bare word "dispute" in an unrelated sense (rare in hotel-support context, but not impossible) be treated as an acceptable cost of catching real dispute threats, or does a false positive here carry its own cost (over-escalating, adding human-review load) worth measuring once real traffic/QA fixtures exist?
 
 New, raised by this SAD:
 
@@ -354,3 +414,7 @@ ADR-002 (`escalation_manager`/`interaction_logger` as deterministic Flow logic, 
 - **Timestamp**: 2026-08-06
 - **Persona**: `system-arch`
 - **Action**: `create-sad --mvp` (follow-up, reviewer feedback item 5: rewrote §7 Performance & Scalability — pinned NFR-002 to p95 ≤ 5s / 10s hard ceiling, added a mandatory Phase 1→2 latency-spike gate and a 3-step fallback ladder (Haiku sentiment tier → reorder `escalation_gate` before `compose_response_task` on the escalate branch → last-resort composer downgrade), explicitly ruled out streaming as a fallback; cross-referenced from §1 Streaming, §2 `escalation_gate`, and MVP Build Sequencing)
+- **Timestamp**: 2026-09-02
+- **Persona**: `system-arch`
+- **Action**: `amend-sad --adr-002-addendum` (triggered by an observed false-negative escalation during manual dashboard testing, 2026-09-02 — a dispute-threat guest message with `confidence=0.92`, `sentiment_score=0.70`, `grounded=true` cleared all three existing ADR-002 conditions. Added ADR-002 Addendum, directly below ADR-002 in §1: a fourth, independently-evaluated OR'd escalation condition, `contains_dispute_language`, a deterministic pinned-phrase check against `redaction.clean_text` only — no LLM call, preserving ADR-002's pure-function/directly-unit-testable property per §9. Specified: the pinned phrase list; the new `"dispute_language_detected"` reason string for `InquiryFlow._escalation_reason()`; and the recommended function-signature change — a separate `contains_dispute_language(text: str) -> bool` pure function, with the resulting bool passed as `evaluate_escalation()`'s 4th parameter, rather than passing raw text into `evaluate_escalation()` itself, so threshold-composition and phrase-matching stay two separately unit-testable functions. Raised as an unresolved Open Question whether the phrase list should move into `domain_config.json` rather than stay a hardcoded constant. This is a SAD-only amendment: no code (`escalation_gate.py`, `inquiry_flow.py`) was changed as part of this action — `@backend-eng` implements against this addendum in a separate follow-up action, deliberately not repeating the undocumented-code-before-SAD pattern qa.md flagged for `MAX_EXECUTION_TIME_SECONDS`.)
+- **Resolved runtime**: `crewai` (`AAMAD_TARGET_RUNTIME` env var, unchanged, consistent with `aamad.config.yml`)

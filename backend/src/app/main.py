@@ -36,6 +36,15 @@ marks the queue row `status='approved'`; reject marks it `status='rejected'`
 with no KB write. See backend.md's Phase 3 section for the re-approve/
 re-reject idempotency choice (409, not silently accepted) and the
 optional-edit request shape.
+
+`*develop-be` follow-up (2026-09-01) adds `GET /interactions/{id}/trace` —
+the backend half of a trace dashboard: every LLM/tool/task Trace Log event
+(`app.persistence.trace_log`) for one interaction, in chronological order,
+now that trace records carry a correlating `interaction_id` (added this
+same run, see `trace_log.py` and `flows/inquiry_flow.py`). 404s only when
+`{id}` isn't a real `interaction_log` row; a real interaction with no
+trace events (e.g. a pii_guard fail-closed halt) returns `200` with
+`events: []`. See backend.md for the correlation mechanism.
 """
 
 from __future__ import annotations
@@ -64,13 +73,14 @@ from app.flows.escalation_resolution_flow import (  # noqa: E402
     run_escalation_resolution,
 )
 from app.flows.inquiry_flow import run_inquiry  # noqa: E402
-from app.persistence.interaction_log import list_interactions  # noqa: E402
+from app.persistence.interaction_log import get_interaction_by_id, list_interactions  # noqa: E402
 from app.persistence.knowledge_base import insert_kb_entry  # noqa: E402
 from app.persistence.review_queue import (  # noqa: E402
     get_review_queue_entry,
     list_review_queue,
     update_review_queue_status,
 )
+from app.persistence.trace_log import get_trace_events_for_interaction  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -409,6 +419,88 @@ def get_interactions() -> list[InteractionRecord]:
     for row in rows:
         row["redaction_actions"] = json.loads(row["redaction_actions"])
     return [InteractionRecord(**row) for row in rows]
+
+
+class InteractionNotFoundError(RuntimeError):
+    """Raised when `GET /interactions/{id}/trace`'s `{id}` doesn't match any
+    persisted `interaction_log` record. Mapped to a 404 by
+    `interaction_not_found_handler` below, same `{error_code, message}`
+    envelope convention as `EscalationNotFoundError`/`ReviewQueueNotFoundError`."""
+
+
+@app.exception_handler(InteractionNotFoundError)
+def interaction_not_found_handler(request: Request, exc: InteractionNotFoundError) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={"error_code": "interaction_not_found", "message": str(exc)},
+    )
+
+
+class TraceEvent(BaseModel):
+    """One Trace Log record (`app.persistence.trace_log`), field set
+    mirrors that module's JSONL record shape exactly, minus the redundant
+    top-level `interaction_id` (already the response envelope's own field,
+    see `InteractionTraceResponse`).
+
+    `event` stays a plain `str` (not a `Literal`) rather than enumerate
+    every value (including the newer `llm_call_started`/`tool_call_started`
+    per-step-latency timing markers, `*develop-be` follow-up 2026-09-01) —
+    this endpoint is a pass-through view of the Trace Log, not a validator
+    of it, and `trace_log.py` is the single source of truth for which
+    event names exist. `duration_ms`/`latency_pass`/`meets_target` are the
+    per-step latency check's fields (sad.md §7 NFR-002 thresholds, reused
+    verbatim for per-call pass/fail): present (non-null) only on
+    `llm_call_completed`/`llm_call_failed`/`tool_call_finished`/
+    `tool_call_error` records; `None` on every other event, since
+    `pydantic`'s default-`None` handling here doubles as "field genuinely
+    absent from that JSONL line" (task_*, *_started) and "present but
+    unmatched" (an unpaired completion) alike — the trace UI does not need
+    to distinguish those two null cases.
+    """
+
+    timestamp: str
+    event: str
+    task_name: str | None = None
+    agent_role: str | None = None
+    outcome: str | None = None
+    detail: str | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+    latency_pass: bool | None = None
+    meets_target: bool | None = None
+
+
+class InteractionTraceResponse(BaseModel):
+    """`GET /interactions/{id}/trace` response schema — the full ordered
+    Trace Log for one interaction, for the trace-dashboard UI (a separate
+    `@frontend.eng` task consumes this; not built here)."""
+
+    interaction_id: str
+    events: list[TraceEvent]
+
+
+@app.get("/interactions/{id}/trace", response_model=InteractionTraceResponse)
+def get_interaction_trace(id: str) -> InteractionTraceResponse:
+    """Full, chronologically-ordered Trace Log (every LLM call and tool
+    call, task start/complete/fail, with success/failure) for one
+    interaction — the backend half of the trace dashboard.
+
+    404 (`interaction_not_found`) if `{id}` doesn't match any persisted
+    `interaction_log` record at all (reusing the same not-found convention
+    as `POST /escalations/{id}/resolve`/the review-queue routes). An empty
+    `events: []` is the correct 200 response for a *real* interaction that
+    has no trace records — e.g. it hit the `pii_guard` fail-closed halt
+    before the reasoning Crew ever ran (`InquiryFlow.pii_redact`'s
+    `PiiGuardFailure` path), or it predates this correlation feature —
+    never a 404.
+    """
+    if get_interaction_by_id(id) is None:
+        raise InteractionNotFoundError(f"No interaction_log record found for id={id!r}")
+
+    events = get_trace_events_for_interaction(id)
+    return InteractionTraceResponse(
+        interaction_id=id, events=[TraceEvent(**event) for event in events]
+    )
 
 
 class ReviewQueueItem(BaseModel):

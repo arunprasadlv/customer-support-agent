@@ -53,8 +53,13 @@ from crewai.flow.flow import Flow, listen, or_, router, start
 from app.agents.pii_guard import kickoff_pii_guard
 from app.agents.reasoning_crew import kickoff_reasoning_crew
 from app.domain.loader import get_domain_config
-from app.flows.escalation_gate import EscalationDecision, evaluate_escalation
+from app.flows.escalation_gate import (
+    EscalationDecision,
+    contains_dispute_language,
+    evaluate_escalation,
+)
 from app.persistence.interaction_log import record_interaction
+from app.persistence.trace_log import bind_interaction_id
 from app.schemas.task_outputs import (
     ClassificationResult,
     ComposedResponse,
@@ -83,6 +88,35 @@ class PiiGuardFailure(RuntimeError):
     """Raised when pii_guard fails to execute. InquiryFlow treats this as a
     fail-closed halt (sad.md §2 Error handling) — no unredacted text may be
     passed forward (FR-011)."""
+
+
+def _safe_diagnostic_message(exc: BaseException) -> str:
+    """Build the diagnostic text safe to persist (both `self.state
+    ["diagnostic"]` and the `interaction_log.diagnostic` column) when
+    `pii_guard` itself has failed (security.md HIGH-1, 2026-09-02 fix).
+
+    Deliberately does NOT include `str(exc)`, even passed through
+    `pii_detector.detect_pii`-style redaction. The whole reason this path
+    exists is that `raw_text` was never confirmed redacted — if the
+    underlying failure happens to echo any of it back (plausible for many
+    Anthropic/CrewAI API client errors, e.g. a 400 that quotes part of the
+    request body, or a validation error that stringifies a rendered task
+    description), a PII-*pattern* redaction pass over `str(exc)` is not a
+    sufficient guarantee: `detect_pii` only masks PII-*shaped* spans
+    (emails, phone numbers, account numbers, self-introduced names) — it
+    would leave ordinary free text (e.g. "my broken lamp in room 214")
+    sitting in the persisted diagnostic completely unmasked, silently
+    defeating the fail-closed guarantee it was meant to uphold. So this
+    mirrors `query_text`'s own fail-closed placeholder in
+    `_log_diagnostic_halt` below: a fixed, content-free message plus only
+    the exception's *type name* (`type(exc).__name__`), which by
+    construction can never carry guest-supplied content, kept for
+    debuggability.
+    """
+    return (
+        "[UNAVAILABLE - PII GUARD FAILURE, EXCEPTION TEXT NOT PERSISTED] "
+        f"exception_type={type(exc).__name__}"
+    )
 
 
 class InquiryFlow(Flow):
@@ -118,8 +152,13 @@ class InquiryFlow(Flow):
                     f"(got {type(result).__name__ if result is not None else None})"
                 )
         except Exception as exc:  # noqa: BLE001 - fail-closed catch-all by design
-            self.state["diagnostic"] = f"pii_guard failure: {exc}"
-            self._log_diagnostic_halt(intake, str(exc))
+            # SECURITY (security.md HIGH-1, 2026-09-02): do not persist
+            # str(exc) here, even redacted. See _safe_diagnostic_message's
+            # docstring for why a PII-pattern redaction pass over the raw
+            # exception text is not a sufficient guarantee on this path.
+            diagnostic = _safe_diagnostic_message(exc)
+            self.state["diagnostic"] = diagnostic
+            self._log_diagnostic_halt(intake, diagnostic)
             raise PiiGuardFailure(str(exc)) from exc
 
         self.state["redaction"] = result
@@ -161,13 +200,21 @@ class InquiryFlow(Flow):
 
     @router(run_reasoning_crew)
     def escalation_gate(self, outcome: dict[str, Any]) -> EscalationDecision:
-        """Step 4: pure-function router (ADR-002) — reads exactly
-        `confidence`, `sentiment_score`, `grounded`."""
+        """Step 4: pure-function router (ADR-002, amended by the ADR-002
+        Addendum 2026-09-02) — reads `confidence`, `sentiment_score`,
+        `grounded` plus one deterministically-derived boolean,
+        `dispute_language_detected`, computed here from
+        `redaction.clean_text` (the already PII-redacted text held in
+        `self.state["redaction"]` — never raw text, per FR-011/ADR-003)."""
+        redaction: RedactionResult = self.state["redaction"]
+        dispute_language_detected = contains_dispute_language(redaction.clean_text)
         decision = evaluate_escalation(
             confidence=outcome["classification"].confidence,
             sentiment_score=outcome["sentiment"].sentiment_score,
             grounded=outcome["composed"].grounded,
+            dispute_language_detected=dispute_language_detected,
         )
+        self.state["dispute_language_detected"] = dispute_language_detected
         self.state["escalation_decision"] = decision
         return decision
 
@@ -184,7 +231,9 @@ class InquiryFlow(Flow):
             payload = {
                 "escalated": True,
                 "reply": ESCALATION_MESSAGE,
-                "reason": self._escalation_reason(outcome),
+                "reason": self._escalation_reason(
+                    outcome, self.state.get("dispute_language_detected", False)
+                ),
             }
         else:
             payload = {"escalated": False, "reply": composed.draft_response, "reason": None}
@@ -232,7 +281,9 @@ class InquiryFlow(Flow):
         return payload
 
     @staticmethod
-    def _escalation_reason(outcome: dict[str, Any]) -> list[str]:
+    def _escalation_reason(
+        outcome: dict[str, Any], dispute_language_detected: bool = False
+    ) -> list[str]:
         reasons = []
         if outcome["composed"].grounded is False:
             reasons.append("not_grounded")
@@ -240,12 +291,21 @@ class InquiryFlow(Flow):
             reasons.append("low_confidence")
         if outcome["sentiment"].sentiment_score >= 0.75:
             reasons.append("high_frustration")
+        if dispute_language_detected:
+            reasons.append("dispute_language_detected")
         return reasons
 
     def _log_diagnostic_halt(self, intake: dict[str, Any], diagnostic: str) -> None:
         """Persist a Diagnostic record on pii_guard failure (sad.md §2
         Error handling). Never persists raw_text — the failure means we
         cannot trust it's been redacted, so only a placeholder is stored.
+
+        `diagnostic` must already be safe to persist verbatim (no raw
+        guest text) by the time it reaches this method — callers must
+        build it via `_safe_diagnostic_message(exc)`, not `str(exc)`
+        directly (security.md HIGH-1, 2026-09-02 fix). This mirrors how
+        `query_text` below is a hardcoded placeholder rather than
+        anything derived from `intake["raw_text"]`.
         """
         try:
             record_interaction(
@@ -261,6 +321,33 @@ class InquiryFlow(Flow):
             )
         except Exception:  # noqa: BLE001 - logging must never mask the original failure
             logger.exception("Failed to persist diagnostic_halt record")
+
+
+def _run_flow_with_trace_correlation(inputs: dict[str, Any]) -> dict[str, Any]:
+    """The actual callable submitted to `run_inquiry`'s per-inquiry
+    `ThreadPoolExecutor` — binds `inputs["inquiry_id"]` as this worker
+    thread's Trace Log `interaction_id` (see `app.persistence.trace_log.
+    bind_interaction_id`) *before* kicking off the Flow, then runs
+    `InquiryFlow().kickoff()` exactly as before.
+
+    This must be the submitted callable itself, not something composed
+    around `kickoff` on the calling thread (e.g. `functools.partial`) —
+    verified directly (test_inquiry_flow.py) that `ThreadPoolExecutor.
+    submit()` does not propagate the submitting thread's `contextvars.
+    Context` into the worker thread the way `asyncio` propagates context
+    into Tasks, so `bind_interaction_id` must execute as the first thing
+    that happens *on the worker thread*, not before `pool.submit(...)` on
+    this thread. Because the whole `kickoff()` call — including the nested,
+    synchronous `pii_guard` Crew (`kickoff_pii_guard`, `pii_redact` step) —
+    runs on this one worker thread, one `bind_interaction_id` call here
+    correlates every Trace Log event either Crew emits for this inquiry.
+    No `reset_interaction_id` call is needed: each `run_inquiry()` call
+    creates a *fresh* `ThreadPoolExecutor(max_workers=1)` (see below), so
+    this worker thread only ever runs this one inquiry before the pool is
+    shut down.
+    """
+    bind_interaction_id(inputs["inquiry_id"])
+    return InquiryFlow().kickoff(inputs=inputs)
 
 
 def run_inquiry(
@@ -313,7 +400,7 @@ def run_inquiry(
     }
 
     pool = ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(InquiryFlow().kickoff, inputs=inputs)
+    future = pool.submit(_run_flow_with_trace_correlation, inputs)
     try:
         result = future.result(timeout=timeout_seconds)
         result["inquiry_id"] = inquiry_id
