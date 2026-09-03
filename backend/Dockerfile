@@ -13,6 +13,7 @@ WORKDIR /app
 # tests/, data/, and local dev artifacts are excluded via .dockerignore so
 # they never enter the build context.
 COPY pyproject.toml ./
+COPY domain_config.json domain_config.schema.json ./
 COPY src ./src
 
 # Runtime-only install (no [dev] extra — pytest/ruff/mypy stay out of the
