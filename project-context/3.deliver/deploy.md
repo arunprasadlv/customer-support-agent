@@ -452,7 +452,6 @@ This file's `*document-deploy` section documented Railway's git-push-to-deploy a
 
 ### Open Questions
 - **Not yet resolved**: whether git-push-to-deploy is actually armed for this project (see finding above) — needs a live dashboard check by the operator, this session cannot inspect that setting.
-- **Blocking end-to-end functionality, not deploy-config**: `ANTHROPIC_API_KEY` still needs to be added in the Railway dashboard (backend service → Variables) before `/chat`/`/email` will work. Everything else (both services, health checks, CORS, volume, SPA routing, build-time API URL wiring) is confirmed live and working without it.
 - Carried forward, unresolved, from earlier sections: the SAD §7 latency gate; the undocumented `MAX_EXECUTION_TIME_SECONDS` deviation; whether to configure a Railway volume backup/snapshot policy for `app.db`; Railway dashboard rollback UI still not visually confirmed (no rollback has been exercised yet, only forward deploys).
 
 ### Audit
@@ -464,3 +463,45 @@ This file's `*document-deploy` section documented Railway's git-push-to-deploy a
 - **Verification performed**: real, live — not read-only. A Railway project/two services/one volume/two domains were actually created; four git commits were actually made and pushed to both `devops` and `main` on the real GitHub remote; both services were confirmed reachable and correctly wired via direct `curl` requests against their live public domains (listed under Sources above), not simulated or assumed
 - **Files changed**: `frontend/nginx.conf` → replaced by `frontend/nginx.conf.template`; `frontend/Dockerfile` (template copy path, `ENV PORT=80`, healthcheck `$PORT`); `project-context/3.deliver/deploy.md` (this section)
 - **Prohibited actions confirmed avoided**: no destructive Railway action taken (no service/volume/project deletion, no force-push, no `git reset`); `ANTHROPIC_API_KEY` was not requested or set on the operator's explicit instruction to handle it themselves; no scope creep beyond what `*define-deploy`/`*document-deploy` had already specified — the two Dockerfile/nginx fixes were bugfixes to already-planned config, not new features
+
+---
+
+## Live Deployment Follow-up: `/chat` End-to-End Verification (2026-09-02)
+
+Operator added `ANTHROPIC_API_KEY` in the Railway dashboard (backend service → Variables) as planned above, then reported "llm call is not happening." Investigation found a **third real bug**, unrelated to the key itself — `/chat` was returning `500` before any LLM call could occur.
+
+### Bug found: `domain_config.json`/`domain_config.schema.json` never entered the backend image
+
+`backend/Dockerfile` only `COPY`d `pyproject.toml` and `src/`. `domain_config.json` and `domain_config.schema.json` live at the `backend/` repo root (sibling to `src/`, not inside it) and are read at runtime by `app.domain.loader.load_domain_config()` (`_BACKEND_ROOT = Path(__file__).resolve().parents[3]`, which resolves to `/app` inside the container). Every `/chat`/`/email` request crashed with `FileNotFoundError: [Errno 2] No such file or directory: '/app/domain_config.json'` inside `run_reasoning_crew` — before `ReasoningCrew` ever made an Anthropic call — caught by `main.py`'s catch-all and surfaced to the client as the generic `{"error_code": "chat_processing_failed", ...}` `500`, with the real traceback only visible in Railway's deploy logs. This is why it looked like "the LLM call is not happening": the key was never reached at all.
+
+**Fix**: added `COPY domain_config.json domain_config.schema.json ./` to `backend/Dockerfile`, right after the existing `pyproject.toml` copy and before `COPY src ./src`. Checked for the same class of bug elsewhere first (`grep` for `resolve().parents[` across `backend/src`): `app/agents/config_loader.py`'s `agents.yaml`/`tasks.yaml` resolve to `backend/src/app/config/`, which *is* inside `src/` and was already being copied correctly — no other instance of this bug found.
+
+### Verified live, real LLM round-trips (not simulated)
+
+After rebuilding (via `connect-service-source` re-attach, same technique as the frontend fixes above — push-to-deploy still not confirmed armed): `uvicorn` logs now show it bound to Railway's actual assigned port (`8080` this deployment — confirms the backend's `${PORT:-8000}` handling from `*define-deploy` continues to work correctly, port varies per deployment as expected). Two real `POST /chat` calls against the live domain both succeeded with genuine LLM-generated replies (not fixtures):
+- `"What time is checkout?"` → `200`, real 11 AM checkout answer, `13.08s` (first request — includes whatever one-time warm-up cost the process/crew incurs; a request made immediately after deploy finished actually hit a `502 Application failed to respond` from Railway's edge before this one succeeded, consistent with a cold-start delay rather than a real failure, not reproduced on either subsequent call)
+- `"Do you have a pool?"` → `200`, real pool-hours answer, `9.02s`
+
+Both `escalated: false`, both well inside the `MAX_EXECUTION_TIME_SECONDS = 30` ceiling this file has already flagged elsewhere as an open SAD §7 discrepancy (unchanged by this finding, not re-litigated here).
+
+### Sources
+- Railway `get-logs` (deploy stream) for the failing deployment — the full Python traceback ending in `FileNotFoundError: [Errno 2] No such file or directory: '/app/domain_config.json'`, read in full before diagnosing.
+- `backend/src/app/domain/loader.py` (`_BACKEND_ROOT`/`_DEFAULT_CONFIG_PATH` resolution logic) and `backend/src/app/agents/config_loader.py` (`_CONFIG_DIR` resolution, confirmed unaffected) — both read directly, not assumed.
+- `backend/Dockerfile`'s `COPY` list before and after the fix; `backend/.dockerignore` (confirmed neither JSON file is excluded there).
+- Two live `curl POST /chat` round-trips against `https://backend-production-6e49.up.railway.app/chat`, timed with `curl -w %{time_total}`.
+
+### Assumptions
+- The single `502 Application failed to respond` on the very first post-deploy request is treated as a cold-start artifact (process/import warm-up), not a recurring problem — based on it not reproducing on either follow-up request in this session. Not proven with more than two follow-up samples; worth the operator's awareness if it recurs.
+
+### Open Questions
+- Whether the ~9-13s per-request latency observed here (two data points only) is representative, or how it relates to the SAD §7 latency gate's still-open 22+-point dataset from `qa.md` — not re-investigated as part of this fix, carried forward unchanged.
+- git-push-to-deploy arming status (from the section above) — still unresolved, this fix was deployed the same manual-reattach way.
+
+### Audit
+- **Timestamp**: 2026-09-02
+- **Persona**: `@devops.eng`
+- **Action**: Live-deploy bugfix, triggered by operator report ("llm call is not happening") after adding `ANTHROPIC_API_KEY` per the prior section's Open Question.
+- **Inputs read in full**: Railway deploy logs for the failing deployment (full traceback), `backend/Dockerfile`, `backend/src/app/domain/loader.py`, `backend/src/app/agents/config_loader.py`, `backend/.dockerignore`
+- **Verification performed**: real, live. Reproduced the `500` via a live `curl POST /chat` before fixing; after the fix, rebuilt the live backend service and confirmed via two real `curl POST /chat` calls that returned genuine LLM-generated replies, not just that the process started or `/health` passed
+- **Files changed**: `backend/Dockerfile` (added the missing `COPY`); `project-context/3.deliver/deploy.md` (this section)
+- **Prohibited actions confirmed avoided**: no change to `app/domain/loader.py` or any application logic — the bug was purely a missing Docker `COPY`, not a code defect; no `qa.md`/`security.md` modified; no scope creep beyond the one missing-file fix
