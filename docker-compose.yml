@@ -1,0 +1,76 @@
+# Local/dev multi-container convenience for customer-support-agent.
+#
+# IMPORTANT: this file is NOT the deploy mechanism for the operator-chosen
+# hosting target (Railway, railway.com — see project-context/3.deliver/
+# deploy.md's 2026-09-02 *define-deploy entry). Railway builds and runs
+# backend/Dockerfile and frontend/Dockerfile as two independent services
+# wired together via Railway's own environment-variable/networking model,
+# not via `docker compose up`. This file exists purely so an operator can
+# run both containers together on a laptop for local testing/demo — same
+# Dockerfiles Railway uses, just orchestrated differently.
+#
+# Usage:
+#   cp .env.docker.example .env.docker   # fill in ANTHROPIC_API_KEY, etc.
+#   docker compose --env-file .env.docker up --build
+#
+# Deliberately named `.env.docker`, not `.env` — this repo's root
+# `.gitignore` already ignores `.env`/`.env.*` (kept, not modified for
+# that pattern), and using a distinct filename avoids any confusion with
+# backend/.env (a different file, read only by local non-Docker `uvicorn`
+# runs per setup.md, never by this compose file).
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: customer-support-agent-backend:local
+    env_file:
+      - path: ./.env.docker
+        required: true
+    environment:
+      # Deploy-shape decisions, not operator secrets — kept out of
+      # .env.docker. Point the app at the named volumes below instead of
+      # its repo-root-inferred defaults (see backend/Dockerfile).
+      INTERACTION_LOG_DB_PATH: /app/data/app.db
+      TRACE_LOG_DIR: /app/logs
+    volumes:
+      - backend_data:/app/data
+      - backend_logs:/app/logs
+    ports:
+      - "${BACKEND_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Vite bakes this into the static bundle at BUILD time (see
+        # frontend/Dockerfile) — it cannot be changed by editing
+        # `environment:` below at container-start time, only by rebuilding.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    image: customer-support-agent-frontend:local
+    ports:
+      - "${FRONTEND_HOST_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  # Named (Docker-managed) volumes, not host bind-mounts — durable across
+  # `docker compose down`/`up` and container recreation, but not literally
+  # the same files as backend/data/ or project-context/2.build/logs/ on
+  # the host. An operator who wants host-visible files instead can replace
+  # these two lines with bind mounts (e.g. "./backend/data:/app/data").
+  backend_data:
+    name: customer-support-agent_backend_data
+  backend_logs:
+    name: customer-support-agent_backend_logs

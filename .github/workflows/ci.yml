@@ -1,0 +1,92 @@
+# CI — lint, test, build only (no deploy step).
+#
+# Scope, per .claude/rules/delivery-workflow.md's Continuous Deployment
+# Policy ("Generate CI/CD configuration files only; do not trigger live
+# deploys without explicit operator authorization") and this persona's
+# *configure-cicd command ("Scaffold CI workflow for lint, test, and
+# build only"): this workflow never deploys to Railway or anywhere else.
+# It has no Railway CLI step, no Docker image push, no publish step of
+# any kind. See project-context/3.deliver/deploy.md's *configure-cicd
+# entry for the full reasoning (working-directory scoping, Python/Node
+# version choices, and the ANTHROPIC_API_KEY-in-CI decision).
+name: CI
+
+on:
+  push:
+    branches: [main, devops]
+  pull_request:
+    branches: [main, devops]
+
+jobs:
+  backend:
+    name: Backend (lint, type-check, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # backend/pyproject.toml pins `requires-python = ">=3.11,<3.15"` and
+      # backend/Dockerfile builds on python:3.11.11-slim-bookworm — 3.11
+      # matches both the floor of that constraint and the shipped runtime.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Ruff (lint)
+        run: ruff check .
+
+      - name: Mypy (type-check)
+        run: mypy src
+
+      - name: Pytest
+        env:
+          # See deploy.md's *configure-cicd entry for the full reasoning.
+          # Short version: unit tests are fully deterministic and need no
+          # key; the handful of live-round-trip integration tests
+          # (test_chat_endpoint.py, test_email_endpoint.py,
+          # test_inquiry_flow.py) each carry an explicit
+          # `@pytest.mark.skipif(not _HAS_ANTHROPIC_KEY, ...)` guard, so
+          # they degrade to a clean skip (not a failure/error) when this
+          # secret is unset — e.g. on a fork PR where secrets aren't
+          # exposed. When the secret *is* set (pushes/PRs from this repo),
+          # those tests run for real against the live Anthropic API,
+          # matching qa.md's own live-verification standard instead of
+          # settling for a weaker, skip-everything CI gate.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: pytest -q
+
+  frontend:
+    name: Frontend (lint, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to match frontend/Dockerfile's build stage
+      # (node:22.12.0-bookworm-slim) so CI and the shipped build use the
+      # same Node line.
+      - name: Set up Node 22.12.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Build (tsc -b && vite build)
+        run: npm run build

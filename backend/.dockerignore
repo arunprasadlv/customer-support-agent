@@ -1,0 +1,14 @@
+# Keep the backend build context small and avoid baking in local dev
+# state, secrets, or dev-only environments (see backend/Dockerfile).
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+data/
+.env
+*.db
+*.sqlite3
+README.md
