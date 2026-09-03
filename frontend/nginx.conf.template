@@ -1,0 +1,28 @@
+# Minimal static-SPA config for the customer-support-agent frontend
+# container (see frontend/Dockerfile). Serves the Vite production build
+# and falls back to index.html for client-side routes (/chat, /inbox,
+# /ops via react-router-dom's BrowserRouter) so a direct navigation or
+# refresh on those paths doesn't hit a raw nginx 404.
+#
+# This is a *template*: the official nginx image's docker-entrypoint runs
+# envsubst on every file under /etc/nginx/templates/*.template at
+# container start, writing the result to /etc/nginx/conf.d/ (suffix
+# stripped) before nginx starts. ${PORT} is resolved from the container's
+# actual environment at that moment — Railway injects a different PORT
+# per deployment/instance, nginx must listen on that exact port or the
+# platform's proxy gets connection-refused (same requirement as the
+# backend's ${PORT:-8000} handling in backend/Dockerfile). The Dockerfile
+# sets a PORT=80 default so this also works unmodified under plain
+# `docker run`/docker-compose, where nothing injects PORT.
+server {
+    listen ${PORT};
+    listen [::]:${PORT};
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

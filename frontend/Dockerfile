@@ -28,15 +28,24 @@ FROM nginx:1.27.3-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
 # SPA fallback: React Router's BrowserRouter (/chat, /inbox, /ops) needs
 # every path to resolve to index.html client-side, not a raw nginx 404.
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Templated (not a static conf) so nginx listens on whatever $PORT the
+# platform assigns at runtime — see nginx.conf.template's own comment.
+# The image's docker-entrypoint runs envsubst on this before nginx starts.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+
+# Fallback only — Railway injects its own PORT per deployment/instance,
+# which overrides this at container runtime. Needed so `docker run`/
+# docker-compose (which don't set PORT) still resolve the template.
+ENV PORT=80
 
 EXPOSE 80
 
 # Not sad.md §5's `/health` requirement — that contract belongs to the
 # backend API. This just confirms the static file server itself answers,
 # for docker-compose's own `depends_on: condition: service_healthy`
-# ordering between the two containers.
+# ordering between the two containers. Shell form (no brackets) so $PORT
+# expands to whatever the template above actually bound to.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://127.0.0.1:80/ || exit 1
+    CMD wget --quiet --tries=1 --spider http://127.0.0.1:${PORT}/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]
