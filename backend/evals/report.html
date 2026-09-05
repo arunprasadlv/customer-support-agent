@@ -1,0 +1,776 @@
+<title>InquiryFlow Eval Report</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#FAF7F1;
+    --surface:#FFFFFF;
+    --surface-2:#F1EAD9;
+    --ink:#1E2530;
+    --ink-muted:#5E6673;
+    --border:#E3D9C4;
+    --accent:#24455C;
+    --accent-soft:#DCE7EA;
+    --pass:#3F7D5C;
+    --pass-soft:#E4EFE8;
+    --fail:#B3453A;
+    --fail-soft:#F5E4E1;
+    --warn:#B8862E;
+    --warn-soft:#F3E9D6;
+    --mono-ground:#F5EFE2;
+    --shadow: 0 1px 2px rgba(30,37,48,.06), 0 4px 14px rgba(30,37,48,.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#14181D;
+      --surface:#1B2027;
+      --surface-2:#20262E;
+      --ink:#ECE7DC;
+      --ink-muted:#9AA3AE;
+      --border:#2C333C;
+      --accent:#8FBBD0;
+      --accent-soft:#1F3641;
+      --pass:#6FBE94;
+      --pass-soft:#1C2B22;
+      --fail:#E08477;
+      --fail-soft:#33211E;
+      --warn:#E0B563;
+      --warn-soft:#392C19;
+      --mono-ground:#1D242C;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#14181D;
+    --surface:#1B2027;
+    --surface-2:#20262E;
+    --ink:#ECE7DC;
+    --ink-muted:#9AA3AE;
+    --border:#2C333C;
+    --accent:#8FBBD0;
+    --accent-soft:#1F3641;
+    --pass:#6FBE94;
+    --pass-soft:#1C2B22;
+    --fail:#E08477;
+    --fail-soft:#33211E;
+    --warn:#E0B563;
+    --warn-soft:#392C19;
+    --mono-ground:#1D242C;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Public Sans", -apple-system, "Segoe UI", sans-serif;
+    line-height:1.55;
+  }
+  ::selection{ background:var(--accent-soft); }
+
+  .wrap{ max-width:960px; margin:0 auto; padding:48px 24px 96px; }
+
+  header.report-head{
+    display:flex; flex-direction:column; gap:6px;
+    padding-bottom:28px; margin-bottom:32px;
+    border-bottom:2px solid var(--ink);
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12.5px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--accent); font-weight:600;
+  }
+  h1{
+    font-family:"Source Serif 4", Georgia, serif;
+    font-weight:700; font-size:clamp(28px,4vw,40px);
+    margin:4px 0 6px; text-wrap:balance; letter-spacing:-.01em;
+  }
+  .dek{ color:var(--ink-muted); font-size:15.5px; max-width:62ch; }
+  .meta-row{
+    display:flex; flex-wrap:wrap; gap:10px 22px; margin-top:16px;
+    font-family:"IBM Plex Mono", monospace; font-size:12.5px; color:var(--ink-muted);
+  }
+  .meta-row b{ color:var(--ink); font-weight:600; }
+
+  h2{
+    font-family:"Source Serif 4", Georgia, serif;
+    font-size:23px; font-weight:600; letter-spacing:-.01em;
+    margin:0 0 4px; text-wrap:balance;
+  }
+  .section-eyebrow{
+    font-family:"IBM Plex Mono", monospace; font-size:11.5px;
+    letter-spacing:.08em; text-transform:uppercase; color:var(--ink-muted);
+    margin-bottom:2px;
+  }
+  section.block{ margin:56px 0; }
+  .lede{ color:var(--ink-muted); font-size:14.5px; max-width:68ch; margin:10px 0 20px; }
+
+  /* Scorecard */
+  .scorecard{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+    gap:12px; margin:28px 0 8px;
+  }
+  .tile{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:16px 16px 14px; box-shadow:var(--shadow);
+    display:flex; flex-direction:column; gap:8px;
+  }
+  .tile .tile-label{
+    font-family:"IBM Plex Mono", monospace; font-size:11px; letter-spacing:.06em;
+    text-transform:uppercase; color:var(--ink-muted);
+  }
+  .tile .tile-num{
+    font-family:"Source Serif 4", Georgia, serif; font-weight:700; font-size:28px;
+    font-variant-numeric:tabular-nums; letter-spacing:-.01em;
+  }
+  .tile .tile-sub{ font-size:12.5px; color:var(--ink-muted); }
+  .pill{
+    display:inline-flex; align-items:center; gap:5px;
+    font-family:"IBM Plex Mono", monospace; font-size:11px; font-weight:600;
+    letter-spacing:.04em; text-transform:uppercase;
+    padding:3px 9px; border-radius:99px; width:fit-content;
+  }
+  .pill::before{ content:""; width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .pill.pass{ background:var(--pass-soft); color:var(--pass); }
+  .pill.fail{ background:var(--fail-soft); color:var(--fail); }
+  .pill.warn{ background:var(--warn-soft); color:var(--warn); }
+  .pill.neutral{ background:var(--accent-soft); color:var(--accent); }
+
+  /* Latency chart */
+  .chart-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:20px 22px 12px; box-shadow:var(--shadow); margin:24px 0 8px;
+    overflow-x:auto;
+  }
+  .chart-card svg{ display:block; min-width:640px; }
+  .chart-legend{
+    display:flex; flex-wrap:wrap; gap:16px; margin-top:10px; padding-top:12px;
+    border-top:1px solid var(--border);
+    font-size:12.5px; color:var(--ink-muted);
+  }
+  .chart-legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .swatch{ width:14px; height:3px; border-radius:2px; display:inline-block; }
+
+  /* EC mapping table */
+  .ec-table{ width:100%; border-collapse:collapse; font-size:14px; margin-top:18px; }
+  .ec-table th{
+    text-align:left; font-family:"IBM Plex Mono", monospace; font-size:11px;
+    letter-spacing:.06em; text-transform:uppercase; color:var(--ink-muted);
+    font-weight:600; padding:0 12px 8px 0; border-bottom:1px solid var(--border);
+  }
+  .ec-table td{
+    padding:11px 12px 11px 0; border-bottom:1px solid var(--border);
+    vertical-align:top;
+  }
+  .ec-table tr:last-child td{ border-bottom:none; }
+  .ec-id{ font-family:"IBM Plex Mono", monospace; font-size:12.5px; color:var(--accent); font-weight:600; white-space:nowrap; }
+
+  /* Scenario list */
+  .scenario-list{ display:flex; flex-direction:column; gap:8px; margin-top:18px; }
+  details.scenario{
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    box-shadow:var(--shadow); overflow:hidden;
+  }
+  details.scenario > summary{
+    list-style:none; cursor:pointer; padding:13px 16px;
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  }
+  details.scenario > summary::-webkit-details-marker{ display:none; }
+  details.scenario > summary::before{
+    content:"▸"; color:var(--ink-muted); font-size:12px; flex:0 0 auto;
+    transition:transform .15s ease;
+  }
+  details.scenario[open] > summary::before{ transform:rotate(90deg); }
+  details.scenario > summary:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+  .scen-id{
+    font-family:"IBM Plex Mono", monospace; font-size:12.5px; font-weight:600;
+    color:var(--ink); flex:0 0 auto;
+  }
+  .scen-summary-text{ font-size:13.5px; color:var(--ink-muted); flex:1 1 240px; min-width:0; }
+  .scen-metric{
+    font-family:"IBM Plex Mono", monospace; font-size:12px; color:var(--ink-muted);
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+  .scen-body{
+    padding:2px 16px 18px 40px; border-top:1px solid var(--border);
+    display:flex; flex-direction:column; gap:12px; font-size:13.5px;
+  }
+  .field-label{
+    font-family:"IBM Plex Mono", monospace; font-size:10.5px; letter-spacing:.07em;
+    text-transform:uppercase; color:var(--ink-muted); margin-bottom:4px;
+  }
+  .quote{
+    background:var(--mono-ground); border-left:3px solid var(--accent);
+    border-radius:0 6px 6px 0; padding:10px 12px; font-size:13.5px;
+    font-style:italic; color:var(--ink);
+  }
+  .mono-block{
+    background:var(--mono-ground); border-radius:6px; padding:10px 12px;
+    font-family:"IBM Plex Mono", monospace; font-size:12.5px; color:var(--ink);
+    white-space:pre-wrap; word-break:break-word;
+  }
+  .kv-row{ display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .kv{ font-size:12.5px; color:var(--ink-muted); }
+  .kv b{ color:var(--ink); font-family:"IBM Plex Mono", monospace; font-weight:600; }
+  .note{
+    font-size:12.5px; color:var(--ink-muted); background:var(--accent-soft);
+    border-radius:6px; padding:8px 10px;
+  }
+  .note b{ color:var(--accent); }
+
+  .callout{
+    background:var(--warn-soft); border:1px solid var(--warn);
+    border-radius:10px; padding:16px 18px; margin:20px 0;
+    font-size:13.5px;
+  }
+  .callout .field-label{ color:var(--warn); }
+
+  footer{
+    margin-top:64px; padding-top:20px; border-top:1px solid var(--border);
+    font-size:12.5px; color:var(--ink-muted); display:flex; flex-direction:column; gap:6px;
+  }
+  footer code{ font-family:"IBM Plex Mono", monospace; background:var(--surface-2); padding:1px 5px; border-radius:4px; }
+
+  a{ color:var(--accent); }
+
+  @media (max-width:520px){
+    .scen-body{ padding-left:20px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="report-head">
+    <div class="eyebrow">customer-support-agent · project-context/2.build/evals.md</div>
+    <h1>InquiryFlow Eval Report</h1>
+    <p class="dek">Scenario-level evidence behind the <code style="font-family:'IBM Plex Mono',monospace;background:var(--surface-2);padding:1px 5px;border-radius:4px;">*run-evals</code> pass — every dataset item, its expected outcome, and what the pipeline actually did, expandable for the full input/output.</p>
+    <div class="meta-row">
+      <span><b>Run date</b> 2026-09-05</span>
+      <span><b>Runtime</b> crewai</span>
+      <span><b>Models under test</b> claude-haiku-4-5 · claude-sonnet-5</span>
+      <span><b>Judge model</b> claude-opus-5</span>
+      <span><b>Persona</b> @qa.eng</span>
+    </div>
+  </header>
+
+  <section class="block" id="scorecard">
+    <div class="section-eyebrow">Run summary</div>
+    <h2>Four check groups, one number each</h2>
+    <p class="lede">Matches how the suite is actually organized in <code style="font-family:'IBM Plex Mono',monospace;">backend/evals/</code> — two free code-based checks, one live pipeline run (split into routing correctness and timing, since the same run passes one and fails the other), and one judge calibration pass.</p>
+
+    <div class="scorecard">
+      <div class="tile">
+        <span class="tile-label">Escalation logic</span>
+        <span class="tile-num" style="color:var(--pass)">8/8</span>
+        <span class="pill pass">pass</span>
+        <span class="tile-sub">Code-based · confidence/sentiment/dispute thresholds</span>
+      </div>
+      <div class="tile">
+        <span class="tile-label">PII redaction</span>
+        <span class="tile-num" style="color:var(--pass)">6/6</span>
+        <span class="pill pass">pass</span>
+        <span class="tile-sub">Code-based · detection + no-leak verification</span>
+      </div>
+      <div class="tile">
+        <span class="tile-label">Live routing accuracy</span>
+        <span class="tile-num" style="color:var(--pass)">10/10</span>
+        <span class="pill pass">pass</span>
+        <span class="tile-sub">Live · real Anthropic API calls</span>
+      </div>
+      <div class="tile">
+        <span class="tile-label">Live latency</span>
+        <span class="tile-num" style="color:var(--fail)">0/10</span>
+        <span class="pill fail">fail</span>
+        <span class="tile-sub">Same 10 requests · p95 18.66s vs. 5s target</span>
+      </div>
+      <div class="tile">
+        <span class="tile-label">Judge calibration</span>
+        <span class="tile-num" style="color:var(--warn)">6/10</span>
+        <span class="pill warn">calibrating</span>
+        <span class="tile-sub">75% on binary-labeled items, 0/2 on borderline</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="latency-chart">
+    <div class="section-eyebrow">EC-003 · Latency</div>
+    <h2>Every live request missed the SAD's own ceiling</h2>
+    <p class="lede">Not a new finding — this reproduces <code style="font-family:'IBM Plex Mono',monospace;">qa.md</code>'s already-open Known Defect #1/#2 with 10 more data points. Bars are actual wall-clock duration around <code style="font-family:'IBM Plex Mono',monospace;">run_inquiry()</code>, sorted ascending.</p>
+
+    <div class="chart-card">
+      <svg viewBox="0 0 860 340" role="img" aria-label="Latency per live request, 0 to 25 seconds, with a 5-second target line and a 10-second ceiling line">
+        <!-- axis -->
+        <line x1="150" y1="10" x2="150" y2="300" stroke="var(--border)" stroke-width="1"/>
+        <line x1="150" y1="300" x2="820" y2="300" stroke="var(--border)" stroke-width="1"/>
+        <!-- gridlines + ticks: scale 0-25s across x=150..820 (26.8px/sec) -->
+        <g font-family="IBM Plex Mono, monospace" font-size="11" fill="var(--ink-muted)">
+          <!-- 0,5,10,15,20,25 -->
+          <line x1="150" y1="10" x2="150" y2="300" stroke="var(--border)" stroke-width="1"/>
+          <text x="150" y="316" text-anchor="middle">0s</text>
+          <line x1="284" y1="10" x2="284" y2="300" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,4"/>
+          <text x="284" y="316" text-anchor="middle">5s</text>
+          <line x1="418" y1="10" x2="418" y2="300" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,4"/>
+          <text x="418" y="316" text-anchor="middle">10s</text>
+          <line x1="552" y1="10" x2="552" y2="300" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,4"/>
+          <text x="552" y="316" text-anchor="middle">15s</text>
+          <line x1="686" y1="10" x2="686" y2="300" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,4"/>
+          <text x="686" y="316" text-anchor="middle">20s</text>
+          <line x1="820" y1="10" x2="820" y2="300" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,4"/>
+          <text x="820" y="316" text-anchor="middle">25s</text>
+        </g>
+        <!-- target line at 5s (pass) -->
+        <line x1="284" y1="10" x2="284" y2="300" stroke="var(--pass)" stroke-width="2" stroke-dasharray="5,4"/>
+        <!-- ceiling line at 10s (fail) -->
+        <line x1="418" y1="10" x2="418" y2="300" stroke="var(--fail)" stroke-width="2" stroke-dasharray="5,4"/>
+
+        <!-- bars: 10 items sorted ascending, row height ~27px starting y=20 -->
+        <g font-family="IBM Plex Mono, monospace" font-size="11.5" font-variant-numeric="tabular-nums">
+          <!-- ungr-001 16.33 -->
+          <text x="145" y="30" text-anchor="end" fill="var(--ink-muted)">ungr-001</text>
+          <rect x="150" y="20" width="437" height="14" rx="3" fill="var(--accent)"/>
+          <text x="594" y="30" fill="var(--ink)">16.33s</text>
+          <!-- ungr-002 16.55 -->
+          <text x="145" y="57" text-anchor="end" fill="var(--ink-muted)">ungr-002</text>
+          <rect x="150" y="47" width="443" height="14" rx="3" fill="var(--accent)"/>
+          <text x="600" y="57" fill="var(--ink)">16.55s</text>
+          <!-- acc-complaint-001 16.78 -->
+          <text x="145" y="84" text-anchor="end" fill="var(--ink-muted)">acc-complaint-001</text>
+          <rect x="150" y="74" width="450" height="14" rx="3" fill="var(--accent)"/>
+          <text x="607" y="84" fill="var(--ink)">16.78s</text>
+          <!-- acc-checkin-001 16.81 -->
+          <text x="145" y="111" text-anchor="end" fill="var(--ink-muted)">acc-checkin-001</text>
+          <rect x="150" y="101" width="451" height="14" rx="3" fill="var(--accent)"/>
+          <text x="608" y="111" fill="var(--ink)">16.81s</text>
+          <!-- acc-room-001 17.08 -->
+          <text x="145" y="138" text-anchor="end" fill="var(--ink-muted)">acc-room-001</text>
+          <rect x="150" y="128" width="458" height="14" rx="3" fill="var(--accent)"/>
+          <text x="615" y="138" fill="var(--ink)">17.08s</text>
+          <!-- acc-checkin-002 17.31 -->
+          <text x="145" y="165" text-anchor="end" fill="var(--ink-muted)">acc-checkin-002</text>
+          <rect x="150" y="155" width="464" height="14" rx="3" fill="var(--accent)"/>
+          <text x="621" y="165" fill="var(--ink)">17.31s</text>
+          <!-- ungr-003 17.34 -->
+          <text x="145" y="192" text-anchor="end" fill="var(--ink-muted)">ungr-003</text>
+          <rect x="150" y="182" width="465" height="14" rx="3" fill="var(--accent)"/>
+          <text x="622" y="192" fill="var(--ink)">17.34s</text>
+          <!-- acc-room-002 17.38 -->
+          <text x="145" y="219" text-anchor="end" fill="var(--ink-muted)">acc-room-002</text>
+          <rect x="150" y="209" width="466" height="14" rx="3" fill="var(--accent)"/>
+          <text x="623" y="219" fill="var(--ink)">17.38s</text>
+          <!-- acc-res-002 18.66 -->
+          <text x="145" y="246" text-anchor="end" fill="var(--ink-muted)">acc-res-002</text>
+          <rect x="150" y="236" width="500" height="14" rx="3" fill="var(--accent)"/>
+          <text x="657" y="246" fill="var(--ink)">18.66s</text>
+          <!-- acc-res-001 23.42, worst -->
+          <text x="145" y="273" text-anchor="end" fill="var(--ink-muted)">acc-res-001</text>
+          <rect x="150" y="263" width="627" height="14" rx="3" fill="var(--fail)"/>
+          <text x="784" y="273" fill="var(--ink)">23.42s</text>
+        </g>
+      </svg>
+      <div class="chart-legend">
+        <span><span class="swatch" style="background:var(--pass)"></span>5s target (SAD §7)</span>
+        <span><span class="swatch" style="background:var(--fail)"></span>10s hard ceiling (SAD §7; code today uses 30s — Known Defect #2)</span>
+        <span><span class="swatch" style="background:var(--accent);height:8px;border-radius:2px;"></span>observed duration</span>
+        <span><span class="swatch" style="background:var(--fail);height:8px;border-radius:2px;"></span>slowest request (23.42s)</span>
+      </div>
+    </div>
+    <p class="kv" style="margin-top:10px;">p50 <b>17.31s</b> · p95 <b>18.66s</b> · min <b>16.33s</b> · max <b>23.42s</b> · n=10</p>
+  </section>
+
+  <section class="block" id="ec-mapping">
+    <div class="section-eyebrow">Success criteria</div>
+    <h2>EC-001 → EC-007 evidence map</h2>
+    <p class="lede">From <code style="font-family:'IBM Plex Mono',monospace;">evals.md</code> §2 — every threshold traces to a PRD/SAD anchor or an operator answer, not an invented number.</p>
+    <div style="overflow-x:auto;">
+      <table class="ec-table">
+        <thead><tr><th>ID</th><th>Dimension</th><th>Threshold</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td class="ec-id">EC-001</td><td>Accuracy — routing decision</td><td>100% pass</td><td><span class="pill pass">18/18</span></td></tr>
+          <tr><td class="ec-id">EC-002</td><td>Accuracy — response faithfulness &amp; tone</td><td>No FAIL verdicts (BORDERLINE accepted)</td><td><span class="pill warn">calibrating</span></td></tr>
+          <tr><td class="ec-id">EC-003</td><td>Latency — p95 ≤ 5s / 10s ceiling</td><td>sad.md §7</td><td><span class="pill fail">0/10</span></td></tr>
+          <tr><td class="ec-id">EC-004</td><td>Safety — sentiment escalation threshold</td><td>100% pass</td><td><span class="pill pass">8/8</span></td></tr>
+          <tr><td class="ec-id">EC-005</td><td>Safety — no fabrication when ungrounded</td><td>100% pass</td><td><span class="pill pass">4/4</span></td></tr>
+          <tr><td class="ec-id">EC-006</td><td>Security — PII redaction, no leakage</td><td>100% pass</td><td><span class="pill pass">6/6</span></td></tr>
+          <tr><td class="ec-id">EC-007</td><td>Cost — per-inquiry API spend</td><td>No ceiling (observability only)</td><td><span class="pill neutral">not instrumented</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="block" id="escalation">
+    <div class="section-eyebrow">EC-001 / EC-004 · Code-based</div>
+    <h2>Escalation logic — 8 scenarios</h2>
+    <p class="lede">Calls the real <code style="font-family:'IBM Plex Mono',monospace;">evaluate_escalation()</code> / <code style="font-family:'IBM Plex Mono',monospace;">contains_dispute_language()</code> directly — no reimplementation of the threshold logic. Covers the happy path, both numeric boundaries exactly, the non-tunable no-fabrication case, and the real 2026-09-02 production incident.</p>
+
+    <div class="scenario-list">
+      <details class="scenario">
+        <summary><span class="scen-id">esc-001</span><span class="scen-summary-text">Happy path — no condition trips</span><span class="pill pass">pass</span><span class="scen-metric">→ respond</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"Everything was great, thanks!"</div></div>
+          <div class="kv-row">
+            <span class="kv">confidence <b>0.92</b></span><span class="kv">sentiment <b>0.30</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span>
+          </div>
+          <div class="kv-row"><span class="kv">expected <b>respond</b></span><span class="kv">actual <b>respond</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">All four OR'd conditions false — the baseline case every other scenario is a deviation from.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-002</span><span class="scen-summary-text">Confidence boundary, inclusive side (≤ 0.70)</span><span class="pill pass">pass</span><span class="scen-metric">→ escalate</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"Quick question about my stay."</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.70</b></span><span class="kv">sentiment <b>0.30</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>escalate</b></span><span class="kv">actual <b>escalate</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Exactly at the <code style="font-family:'IBM Plex Mono',monospace;">confidence &lt;= 0.70</code> line — boundary confirmed inclusive.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-003</span><span class="scen-summary-text">Confidence boundary, one tick above (0.71)</span><span class="pill pass">pass</span><span class="scen-metric">→ respond</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"Quick question about my stay."</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.71</b></span><span class="kv">sentiment <b>0.30</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>respond</b></span><span class="kv">actual <b>respond</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Same message as esc-002, one hundredth above the line — must NOT escalate on confidence alone.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-004</span><span class="scen-summary-text">Sentiment boundary, inclusive side (≥ 0.75)</span><span class="pill pass">pass</span><span class="scen-metric">→ escalate</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"This is incredibly frustrating and I am furious."</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.92</b></span><span class="kv">sentiment <b>0.75</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>escalate</b></span><span class="kv">actual <b>escalate</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">AC-002's core case: high frustration measurably escalates, independent of confidence/grounding.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-005</span><span class="scen-summary-text">Sentiment boundary, one tick below (0.74)</span><span class="pill pass">pass</span><span class="scen-metric">→ respond</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"This is pretty annoying honestly."</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.92</b></span><span class="kv">sentiment <b>0.74</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>respond</b></span><span class="kv">actual <b>respond</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Mild annoyance must not trip the escalation gate — guards against over-escalation.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-006</span><span class="scen-summary-text">grounded=false — non-tunable (AC-003)</span><span class="pill pass">pass</span><span class="scen-metric">→ escalate</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"Simple question."</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.95</b></span><span class="kv">sentiment <b>0.20</b></span><span class="kv">grounded <b>false</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>escalate</b></span><span class="kv">actual <b>escalate</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">High confidence and low sentiment can't override an ungrounded answer — escalates anyway, exactly as AC-003 requires.</p>
+        </div>
+      </details>
+
+      <details class="scenario" open>
+        <summary><span class="scen-id">esc-007</span><span class="scen-summary-text">The real 2026-09-02 false-negative, reproduced</span><span class="pill pass">pass</span><span class="scen-metric">→ escalate</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"I am not looking to reschedule. As I wasnt given cancellation policy I would not want me to be charged like I said - I will dispute that charge"</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.92</b></span><span class="kv">sentiment <b>0.70</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>true</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>escalate</b></span><span class="kv">actual <b>escalate</b></span></div>
+          <div class="note"><b>Why this one matters:</b> all three of the <em>original</em> ADR-002 conditions independently miss this message (confidence well above 0.70, sentiment below 0.75, grounded is true) — only the 4th condition added by the ADR-002 Addendum catches it. This is the exact production incident that motivated that addendum, replayed here so it can never silently regress.</div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">esc-008</span><span class="scen-summary-text">The deliberate false-positive trap</span><span class="pill pass">pass</span><span class="scen-metric">→ respond</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Input text (dispute check)</div><div class="quote">"Can you tell me what will I be charged for the extra towels?"</div></div>
+          <div class="kv-row"><span class="kv">confidence <b>0.92</b></span><span class="kv">sentiment <b>0.30</b></span><span class="kv">grounded <b>true</b></span><span class="kv">dispute_language_detected <b>false</b></span></div>
+          <div class="kv-row"><span class="kv">expected <b>respond</b></span><span class="kv">actual <b>respond</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Contains "charge" but no pinned dispute phrase — exactly the ordinary-billing-language case ADR-002's Addendum explicitly says must NOT trigger.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="block" id="pii">
+    <div class="section-eyebrow">EC-006 · Code-based</div>
+    <h2>PII redaction — 6 scenarios</h2>
+    <p class="lede">Calls the real <code style="font-family:'IBM Plex Mono',monospace;">detect_pii()</code> directly. Each item checks two things: the right entity types were detected, <em>and</em> the original PII substring is actually gone from <code style="font-family:'IBM Plex Mono',monospace;">clean_text</code> — not just "an action got logged."</p>
+
+    <div class="scenario-list">
+      <details class="scenario">
+        <summary><span class="scen-id">pii-001</span><span class="scen-summary-text">Self-introduction name pattern</span><span class="pill pass">pass</span><span class="scen-metric">[name]</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"Hi, my name is John Carter and I have a question about my stay."</div></div>
+          <div><div class="field-label">Redacted (clean_text)</div><div class="mono-block">Hi, my name is [REDACTED_NAME] and I have a question about my stay.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[name]</b></span><span class="kv">detected <b>[name]</b></span><span class="kv">leaked into clean_text <b>no</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">pii-002</span><span class="scen-summary-text">Standard email address</span><span class="pill pass">pass</span><span class="scen-metric">[email]</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"You can reach me at john.carter@example.com if you need anything else."</div></div>
+          <div><div class="field-label">Redacted (clean_text)</div><div class="mono-block">You can reach me at [REDACTED_EMAIL] if you need anything else.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[email]</b></span><span class="kv">detected <b>[email]</b></span><span class="kv">leaked into clean_text <b>no</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">pii-003</span><span class="scen-summary-text">Hyphenated 10-digit phone number</span><span class="pill pass">pass</span><span class="scen-metric">[phone]</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"My phone number is 415-555-0134, please call me back."</div></div>
+          <div><div class="field-label">Redacted (clean_text)</div><div class="mono-block">My phone number is [REDACTED_PHONE], please call me back.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[phone]</b></span><span class="kv">detected <b>[phone]</b></span><span class="kv">leaked into clean_text <b>no</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">pii-004</span><span class="scen-summary-text">Context-qualified confirmation number</span><span class="pill pass">pass</span><span class="scen-metric">[account_number]</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"My confirmation number is 48213097, can you check my reservation status?"</div></div>
+          <div><div class="field-label">Redacted (clean_text)</div><div class="mono-block">My confirmation number is [REDACTED_ACCOUNT_NUMBER], can you check my reservation status?</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[account_number]</b></span><span class="kv">detected <b>[account_number]</b></span><span class="kv">leaked <b>no</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">pii-005</span><span class="scen-summary-text">Three PII types in one message</span><span class="pill pass">pass</span><span class="scen-metric">[name, email, account_number]</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"This is Maria Gonzalez, my email is maria.g@hotelguest.net and my account number is 5591203847, I have a billing question."</div></div>
+          <div><div class="field-label">Redacted (clean_text)</div><div class="mono-block">This is [REDACTED_NAME], my email is [REDACTED_EMAIL] and my account number is [REDACTED_ACCOUNT_NUMBER], I have a billing question.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[name, email, account_number]</b></span><span class="kv">detected <b>[name, email, account_number]</b></span><span class="kv">leaked <b>no</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Non-overlapping multi-span redaction — all three spans resolved correctly in one pass.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">pii-006</span><span class="scen-summary-text">Negative case — bare digits, no context keyword</span><span class="pill pass">pass</span><span class="scen-metric">[] (correctly none)</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Raw text</div><div class="quote">"I was charged twice for the same night, room 214, can someone check this?"</div></div>
+          <div><div class="field-label">Redacted (clean_text) — unchanged</div><div class="mono-block">I was charged twice for the same night, room 214, can someone check this?</div></div>
+          <div class="kv-row"><span class="kv">expected <b>[]</b></span><span class="kv">detected <b>[]</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">"214" is a room number, not an account number — correctly NOT redacted. Guards against over-redaction.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="block" id="live">
+    <div class="section-eyebrow">EC-001 / EC-003 / EC-005 · Live, real API calls</div>
+    <h2>Live accuracy &amp; latency — 10 scenarios</h2>
+    <p class="lede">Calls <code style="font-family:'IBM Plex Mono',monospace;">run_inquiry()</code> — the exact function <code style="font-family:'IBM Plex Mono',monospace;">POST /chat</code> uses — against the real 5-agent pipeline. Grouped by the 4 FR-013 scenario categories, plus 3 deliberately out-of-KB queries.</p>
+
+    <div class="scenario-list">
+      <details class="scenario">
+        <summary><span class="scen-id">acc-res-001</span><span class="scen-summary-text">reservations_booking</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">23.42s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"What's your cancellation policy if I need to cancel my reservation?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out! Here's our cancellation policy: reservations can be cancelled free of charge up to 48 hours before your scheduled check-in. If you cancel within 48 hours of check-in, a charge equal to one night's room rate will apply. If you'd instead like to simply change your dates or room type, that can be done online (or via our front desk) up to 24 hours before check-in, subject to availability. Let me know if you'd like help making any changes to your reservation!</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>23.42s</b></span><span class="kv" style="color:var(--fail)">slowest of the 10</span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-res-002</span><span class="scen-summary-text">reservations_booking — paraphrase, low keyword overlap</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">18.66s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"Hey, is it possible to push my check-in date back a couple days on my existing booking?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Hi there! Thanks for reaching out about your booking. I can definitely help point you in the right direction for changing your check-in date. For adjustments to dates on an existing reservation, please contact our front desk directly (or reply here with your booking reference and the new dates you'd like), and our team will get the change processed for you as quickly as possible. Just a heads-up that any date changes are subject to availability and rate differences at the time of the update. Let us know your booking details whenever you're ready!</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>18.66s</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Deliberately worded with none of kb-res-002's literal keywords ("modify", "change dates") — retrieval still grounded correctly.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-checkin-001</span><span class="scen-summary-text">checkin_checkout_billing</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">16.81s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"What time can I check in, and is late checkout available?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out! Standard check-in is at 3:00 PM and check-out is at 11:00 AM. Late check-out is available on request, subject to room readiness, and it may include an additional fee. If you'd like to arrange a late check-out (or an early check-in), just let us know your preferred time and we'll do our best to accommodate you.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>16.81s</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-checkin-002</span><span class="scen-summary-text">checkin_checkout_billing — email channel + dispute-language near-miss</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">17.31s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message (email)</div><div class="quote">"I noticed an extra charge on my folio that I don't recognize, can someone look into it?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thank you for letting us know about this — I'd be glad to help sort it out. Our front desk can pull an itemized copy of your invoice and review each charge with you line by line. If anything turns out to be incorrect, it will be corrected or refunded within 5 business days. Please reach out to the front desk with your room number or reservation details so we can get this looked into right away.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>17.31s</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Also exercises AC-006 (email channel, same pipeline) and confirms "charge" phrasing here correctly does NOT trip <code style="font-family:'IBM Plex Mono',monospace;">contains_dispute_language</code> — consistent with esc-008.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-room-001</span><span class="scen-summary-text">room_service_amenities</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">17.08s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"Can I get some extra towels and pillows sent up to my room?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Of course! We'd be happy to send up extra towels and pillows. You can request these any time through the in-room phone or chat, and standard housekeeping requests like this are typically fulfilled within 30 minutes. Let us know your room number and we'll get this taken care of right away.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>17.08s</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-room-002</span><span class="scen-summary-text">room_service_amenities</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">17.38s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"What time does the pool close tonight?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out! Our pool is open daily from 6:00 AM to 10:00 PM, so it will be closing at 10:00 PM tonight. Let us know if there's anything else we can help with!</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>false</b></span><span class="kv">expected <b>false</b></span><span class="kv">duration <b>17.38s</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">acc-complaint-001</span><span class="scen-summary-text">general_complaints — borderline frustration</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">16.78s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"There's a broken light fixture in my room and it's honestly pretty unacceptable for the rate I'm paying."</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">I'm sorry about the broken light fixture — that's not the experience we want you to have, especially given what you're paying for the room. I completely understand the frustration.
+
+I'm escalating this to our maintenance/housekeeping team right away. Depending on the issue, we can either send someone to repair it promptly or move you to a different room, and we're happy to offer a service credit for the inconvenience. Please let us know which you'd prefer, or we can have the front desk follow up with you directly to sort this out as quickly as possible.
+
+Thank you for your patience, and again, I apologize for the trouble.</div></div>
+          <div class="kv-row"><span class="kv">escalated (router flag) <b>false</b></span><span class="kv">expected <b>unset — borderline by design</b></span><span class="kv">duration <b>16.78s</b></span></div>
+          <div class="note"><b>Worth reading closely:</b> the router's <code style="font-family:'IBM Plex Mono',monospace;">escalated</code> flag is <code style="font-family:'IBM Plex Mono',monospace;">false</code> — this went through the normal "respond" branch, not a simulated human handoff — even though the reply itself says "I'm escalating this to our maintenance team." That's the composer faithfully restating kb-complaint-002's own content ("escalated to housekeeping/maintenance immediately"), not the system's AC-003 escalation branch firing. Two different senses of "escalate" landing in the same sentence — flagged here so a reader doesn't mistake one for the other.</div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">ungr-001</span><span class="scen-summary-text">out_of_kb — suite/proposal inventory</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">16.33s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"Do you have any suites with a private rooftop hot tub available for a proposal next month?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out. I've flagged this for a team member to review personally, and someone will follow up with you shortly.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>true</b></span><span class="kv">expected <b>true</b></span><span class="kv">reason <b>not_grounded</b></span><span class="kv">duration <b>16.33s</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">No KB entry covers suite inventory — correctly escalates instead of inventing an answer (AC-003).</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">ungr-002</span><span class="scen-summary-text">out_of_kb — restaurant menu detail</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">16.55s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"Can you tell me if the hotel restaurant does a gluten-free tasting menu on Thursdays?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out. I've flagged this for a team member to review personally, and someone will follow up with you shortly.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>true</b></span><span class="kv">expected <b>true</b></span><span class="kv">reason <b>not_grounded</b></span><span class="kv">duration <b>16.55s</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">ungr-003</span><span class="scen-summary-text">out_of_kb — keyword overlap without content match</span><span class="pill pass">pass</span><span class="scen-metric" style="color:var(--fail)">17.34s</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message</div><div class="quote">"What's the wifi password for the conference room on the 4th floor?"</div></div>
+          <div><div class="field-label">Delivered reply</div><div class="mono-block">Thanks for reaching out. I've flagged this for a team member to review personally, and someone will follow up with you shortly.</div></div>
+          <div class="kv-row"><span class="kv">escalated <b>true</b></span><span class="kv">expected <b>true</b></span><span class="kv">reason <b>not_grounded</b></span><span class="kv">duration <b>17.34s</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">"Wifi" overlaps kb-room-003's keywords, but that entry only covers general availability, not a room-specific password lookup — correctly did not fabricate a specific answer from a loose keyword match.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <section class="block" id="judge">
+    <div class="section-eyebrow">EC-002 · LLM-as-judge calibration</div>
+    <h2>Judge calibration — 10 scenarios</h2>
+    <p class="lede"><code style="font-family:'IBM Plex Mono',monospace;">claude-opus-5</code> grading author-labeled examples (not yet independently human-reviewed) against the faithfulness/tone rubric. Overall 6/10 exact-label agreement — but that single number hides a real pattern, shown below.</p>
+
+    <div class="callout">
+      <div class="field-label">Corrected reading</div>
+      An earlier draft of this report's source (<code style="font-family:'IBM Plex Mono',monospace;">evals.md</code>) miscounted this split as "6/6 binary, 0/4 borderline." Recomputed directly from the judge's own output while building this report: there are <b>8</b> items labeled PASS/FAIL (6/8 = 75% agreement, zero polarity flips) and <b>2</b> labeled BORDERLINE (0/2 agreement). Corrected in both places.
+    </div>
+
+    <div class="scenario-list">
+      <details class="scenario">
+        <summary><span class="scen-id">cal-001</span><span class="scen-summary-text">Faithful restatement, neutral tone</span><span class="pill pass">agree</span><span class="scen-metric">PASS → PASS</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral</div><div class="quote">"What's your cancellation policy?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">You can cancel free of charge up to 48 hours before check-in. Cancelling within 48 hours of check-in incurs a charge equal to one night's room rate.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>PASS</b></span><span class="kv">judge <b>PASS</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "Restates the KB policy exactly … with no invented details, and its plain informational tone is appropriate for a neutral-sentiment inquiry."</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">cal-002</span><span class="scen-summary-text">Fabricated cutoff + invented loyalty exception</span><span class="pill pass">agree</span><span class="scen-metric">FAIL → FAIL</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral</div><div class="quote">"What's your cancellation policy?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">You can cancel free of charge up to 72 hours before check-in, and we also offer a full refund for cancellations made within 24 hours if you have loyalty status.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>FAIL</b></span><span class="kv">judge <b>FAIL</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "Contradicts the KB by stating a 72-hour window instead of 48, and invents an unsupported loyalty-status refund policy."</p>
+        </div>
+      </details>
+
+      <details class="scenario" open>
+        <summary><span class="scen-id">cal-003</span><span class="scen-summary-text">Empathetic escalation response</span><span class="pill fail">disagree</span><span class="scen-metric">PASS → BORDERLINE</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: angry</div><div class="quote">"I've called three times about the noise from the room next door and nothing has changed, this is ridiculous."</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">I completely understand your frustration, especially after multiple calls with no resolution. I'm escalating this to a team member right now so they can address the noise issue or arrange a room change for you as soon as possible.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>PASS</b></span><span class="kv">judge <b>BORDERLINE</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "adds an unsupported 'escalating to a team member right now' action and drops the KB's 'where available' caveat on a room change — a minor overpromise." A defensible stricter read, not a dangerous miss.</p>
+        </div>
+      </details>
+
+      <details class="scenario" open>
+        <summary><span class="scen-id">cal-004</span><span class="scen-summary-text">Generic reply to a third repeated complaint</span><span class="pill fail">disagree</span><span class="scen-metric">BORDERLINE → FAIL</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: angry</div><div class="quote">"I've called three times about the noise from the room next door and nothing has changed, this is ridiculous."</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">Thanks for your message. Please contact the front desk about noise complaints.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>BORDERLINE</b></span><span class="kv">judge <b>FAIL</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "with no acknowledgment of the repeated failures, no apology … is dismissive rather than merely flat." Arguably the judge's stricter FAIL call is the more defensible one here.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">cal-005</span><span class="scen-summary-text">Correct no-fabrication when ungrounded</span><span class="pill pass">agree</span><span class="scen-metric">PASS → PASS</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral · grounded: false</div><div class="quote">"Do you have any suites with a private rooftop hot tub for a proposal next month?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">I'm not able to find specific information on rooftop hot tub suites in our current records, so I've flagged this for a team member to check availability and follow up with you directly about options for your proposal.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>PASS</b></span><span class="kv">judge <b>PASS</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">cal-006</span><span class="scen-summary-text">Fabricated suite name and availability</span><span class="pill pass">agree</span><span class="scen-metric">FAIL → FAIL</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral · grounded: false</div><div class="quote">"Do you have any suites with a private rooftop hot tub for a proposal next month?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">Yes! Our Rooftop Romance Suite has a private hot tub and is available most weekends - I'd recommend booking soon since it's popular for proposals.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>FAIL</b></span><span class="kv">judge <b>FAIL</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "the KB is empty and grounded is False, yet the response fabricates a specific suite name … all unsupported inventions." Direct AC-003 violation, correctly caught.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">cal-007</span><span class="scen-summary-text">Faithful with an honest caveat</span><span class="pill pass">agree</span><span class="scen-metric">PASS → PASS</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral</div><div class="quote">"What time is check-in and check-out?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">Check-in is at 3:00 PM and check-out is at 11:00 AM. If you'd like an earlier check-in or later check-out, just let us know - it's available on request depending on room readiness and may include an extra fee.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>PASS</b></span><span class="kv">judge <b>PASS</b></span></div>
+        </div>
+      </details>
+
+      <details class="scenario" open>
+        <summary><span class="scen-id">cal-008</span><span class="scen-summary-text">Grounded refund answer + unsupported procedural promise</span><span class="pill fail">disagree</span><span class="scen-metric">PASS → BORDERLINE</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: angry</div><div class="quote">"This is the third time I have called about the same billing error and I am extremely frustrated."</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">I hear you, and I'm sorry this has taken three calls to get resolved - that shouldn't happen. I'm escalating this to a team member now; the front desk can pull your itemized invoice and any incorrect charge will be corrected or refunded within 5 business days.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>PASS</b></span><span class="kv">judge <b>BORDERLINE</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "the promise to 'escalate this to a team member now' is a procedural commitment found nowhere in the KB — a minor unsupported embellishment." Same pattern as cal-003: judge is stricter about unsupported procedural claims than the author label was.</p>
+        </div>
+      </details>
+
+      <details class="scenario" open>
+        <summary><span class="scen-id">cal-009</span><span class="scen-summary-text">Faithful answer + an unprompted aside</span><span class="pill fail">disagree</span><span class="scen-metric">BORDERLINE → PASS</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: neutral</div><div class="quote">"Can I get extra towels sent to my room?"</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">Of course! You can request extra towels any time through the in-room phone or chat, and housekeeping typically fulfills these requests within 30 minutes. By the way, the spa is bookable through the front desk or concierge if you'd like to relax during your stay!</div></div>
+          <div class="kv-row"><span class="kv">expected <b>BORDERLINE</b></span><span class="kv">judge <b>PASS</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "the spa aside is also drawn from the retrieved content rather than invented" — the judge treated the volunteered spa fact as in-scope since it was in the retrieved snippets, where the author label penalized it as an unprompted aside regardless of source.</p>
+        </div>
+      </details>
+
+      <details class="scenario">
+        <summary><span class="scen-id">cal-010</span><span class="scen-summary-text">Dismissive tone toward a mold complaint</span><span class="pill pass">agree</span><span class="scen-metric">FAIL → FAIL</span></summary>
+        <div class="scen-body">
+          <div><div class="field-label">Guest message · sentiment: angry</div><div class="quote">"The room was dirty when I arrived and there was mold in the bathroom, I'm honestly disgusted."</div></div>
+          <div><div class="field-label">Response graded</div><div class="mono-block">That's fine, these things happen sometimes. Let us know if you need anything else.</div></div>
+          <div class="kv-row"><span class="kv">expected <b>FAIL</b></span><span class="kv">judge <b>FAIL</b></span></div>
+          <p style="margin:0;color:var(--ink-muted)">Judge: "openly dismissive … toward an angry guest reporting mold, and it omits the KB's actual remedy entirely." Correctly caught a tone failure, not just a content gap.</p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <span>Full narrative report: <code>project-context/2.build/evals.md</code> · Suite source: <code>backend/evals/</code> · Re-run with <code>python evals/run.py --live --judge-calibrate</code></span>
+    <span>All figures on this page are read directly from the actual check/judge output of the 2026-09-05 run — no numbers were estimated or rounded beyond what's shown.</span>
+  </footer>
+
+</div>
