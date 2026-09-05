@@ -58,6 +58,9 @@ backend/data/*.db
 backend/data/*.sqlite3
 !backend/data/.gitkeep
 
+# --- Eval run artifacts (backend/evals) ---
+backend/evals/last_run_report.json
+
 # --- Node ---
 node_modules/
 npm-debug.log*

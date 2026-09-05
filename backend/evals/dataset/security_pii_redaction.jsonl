@@ -1,0 +1,6 @@
+{"id": "pii-001", "raw_text": "Hi, my name is John Carter and I have a question about my stay.", "expected_entity_types": ["name"], "notes": "Self-introduction pattern."}
+{"id": "pii-002", "raw_text": "You can reach me at john.carter@example.com if you need anything else.", "expected_entity_types": ["email"], "notes": "Standard email format."}
+{"id": "pii-003", "raw_text": "My phone number is 415-555-0134, please call me back.", "expected_entity_types": ["phone"], "notes": "Hyphenated 10-digit phone."}
+{"id": "pii-004", "raw_text": "My confirmation number is 48213097, can you check my reservation status?", "expected_entity_types": ["account_number"], "notes": "Context-qualified digit sequence (confirmation keyword)."}
+{"id": "pii-005", "raw_text": "This is Maria Gonzalez, my email is maria.g@hotelguest.net and my account number is 5591203847, I have a billing question.", "expected_entity_types": ["name", "email", "account_number"], "notes": "Multiple PII types in one message - tests non-overlapping multi-span redaction."}
+{"id": "pii-006", "raw_text": "I was charged twice for the same night, room 214, can someone check this?", "expected_entity_types": [], "notes": "Negative case - bare digits (room number) with no context keyword must NOT be redacted as an account number (avoids over-redaction)."}
