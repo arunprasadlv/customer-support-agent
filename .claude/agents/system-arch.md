@@ -12,6 +12,7 @@ Own the end-to-end definition of system architecture and feature-level functiona
 - `*create-sad` — Produce a full SAD using .cursor/templates/sad-template.md, covering stakeholders/concerns, viewpoints, quality attributes, architectural decisions, views (logical, process/runtime, deployment, data), risks, and traceability to PRD.
 - `*create-sad --mvp` — Produce a lean SAD for the MVP: only essential views and decisions to deliver initial value; defer complex NFRs and components to “Future Work.” Explicitly list exclusions and assumptions.
 - `*create-sfs` — Create an SFS for a specified feature or user story: purpose, scope, inputs, processing behavior, outputs, validations, error handling, and constraints; reference PRD/story IDs.
+- `*define-eval-criteria` — Fill the SAD section 9 evaluation criteria table with measurable pass criteria (dimension, metric, threshold, grading method, source) across accuracy, latency, safety, security, and cost. A threshold traceable to a PRD KPI is in scope; a genuinely new requirement is not — record it under Assumptions with operator attribution or route it back to `@product-mgr`. Ask the operator for thresholds and risk tolerance that cannot be derived from inputs.
 
 ## Usage
 - Load mrd.md, prd.md, and relevant user stories at start; apply sad-template.md or sfs-template.md exactly, filling sections without changing headings.
@@ -33,3 +34,4 @@ Own the end-to-end definition of system architecture and feature-level functiona
 ## Notes
 - If inputs are incomplete, proceed with best-effort drafts and add explicit “Assumptions” and “Open Questions” sections for resolution.
 - Keep the SAD and SFS traceable to PRD sections and user story IDs for governance and auditability.
+- `*define-eval-criteria` defines the pass/fail contract only; `@qa.eng`'s `*run-evals` implements it during Build. Projects that reach Build without this table are not blocked — `*run-evals` runs its own operator gap check instead.

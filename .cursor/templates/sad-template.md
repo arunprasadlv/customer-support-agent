@@ -132,6 +132,16 @@ This document is the blueprint for Build-phase personas. Prefer lean MVP views; 
 - Runtime-specific checks (task outputs, hook traces, schema validation)  
 - Security assessment recommended before Deliver
 
+**Evaluation Criteria** (when `*define-eval-criteria` has been run):
+
+Measurable pass criteria across accuracy, latency, safety, security, and cost, derived from PRD KPIs, the SLA, and the consequence of a wrong output — not from what an early prototype happens to score. Ask the operator for thresholds that cannot be derived from inputs; do not invent them.
+
+| ID | Dimension | Metric | Threshold | Grading Method | Source |
+|----|-----------|--------|-----------|-----------------|--------|
+| EC-001 | Accuracy | … | … | Code-based / LLM judge / Human | PRD §x / Operator answer |
+
+`@qa.eng` implements this table via `*run-evals`, producing the golden dataset, graders, and `evals.md`. When this table is absent (projects predating this capability), `*run-evals` runs its own operator gap check instead of blocking.
+
 ### 10. MVP Launch & Feedback Strategy
 
 - Beta / pilot criteria when applicable  

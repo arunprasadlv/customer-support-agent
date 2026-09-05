@@ -8,6 +8,7 @@
 | Backend      | @backend.eng   | backend.md             | SAD: Crew Spec, PRD: Agent Def | *develop-be       |
 | Integration  | @integration.eng | integration.md       | SAD: API & Flows, PRD: Int Req | *integrate-api    |
 | QA           | @qa.eng        | qa.md                  | SAD: Testing, PRD: QA Plan     | *qa               |
+| Evals        | @qa.eng        | evals.md               | SAD: Testing §9 (criteria table), PRD: Success Metrics | *run-evals |
 | Security     | @security.eng  | security.md            | SAD: Security, PRD: Security   | *assess-security  |
 | Deploy       | @devops.eng    | deploy.md              | SAD: DevOps & Deployment       | *prepare-release  |
 

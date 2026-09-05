@@ -67,7 +67,8 @@ AAMAD changes “vibe coding” from ad-hoc prompting into a **context-first, pe
 
 - **Persona-driven development:** Each workflow is owned and documented by a clear AI agent persona with a single responsibility principle.
 - **Context artifacts:** All major actions, decisions, and documentation are stored as markdown artifacts, ensuring explainability and reproducibility.
-- **Quality gates:** Required artifact headings, optional `aamad validate`, and QA → security → deliver sequencing.
+- **Quality gates:** Required artifact headings, optional `aamad validate`, and QA → evals → security → deliver sequencing.
+- **Evals as acceptance criteria:** Measurable success thresholds (accuracy, latency, safety, security, cost) defined before Build in the SAD and implemented as a golden-dataset eval suite (`*run-evals`) that gates future model/prompt changes.
 - **Project configuration:** Optional `aamad.config.yml` for shared language, UI, testing, and security preferences across personas.
 - **Documentation sync:** After enhancing generated code, use `prompt-sync-docs` so `project-context/` stays aligned with the implementation.
 - **Parallelizable epics:** Big tasks are broken into epics, making development faster and more autonomous while retaining control over quality.
@@ -91,6 +92,7 @@ flowchart LR
 
   subgraph P2[BUILD]
     B1H[AGENTS]:::hdr --> B1L["• Project Mgr<br/>• System Architect<br/>• Frontend / Backend<br/>• Integration / QA<br/>• Security Eng"]:::list
+    B3H[SKILLS]:::hdr --> B3L["• run-evals<br/>(@qa.eng)"]:::list
     B2H[RULES]:::hdr --> B2L["• core<br/>• development‑workflow<br/>• runtime adapter (crewai, claude-agent-sdk, or cursor-sdk)"]:::list
   end
 
@@ -144,6 +146,7 @@ aamad init --ide vscode       # VS Code + GitHub Copilot
 | **Agent invocation** | `@agent-name` in chat | Delegation via `description`; explicit request | Agent dropdown; `@agent-name`; handoff buttons |
 | **Tool enforcement** | Instructions-based | ✅ Hard allowlist/denylist | ✅ Tool allowlist in frontmatter |
 | **Phase 1 prompt** | `.cursor/prompts/prompt-phase-1` | `.claude/commands/phase-1-define.md` (slash command) | `.github/prompts/phase-1-define.prompt.md` |
+| **Skills** | `.cursor/skills/run-evals/` | `.claude/skills/run-evals/` (native skills) | `.github/prompts/run-evals.prompt.md` (bound to `qa-eng`; no native skills primitive) |
 | **Templates** | `.cursor/templates/` (shared) | `.cursor/templates/` (shared) | `.cursor/templates/` (shared) |
 | **Project context** | `project-context/` (shared) | `project-context/` (shared) | `project-context/` (shared) |
 | **Bridge file** | `AGENTS.md` (root) | `AGENTS.md` (root) | `AGENTS.md` (root) |
@@ -177,6 +180,7 @@ your-project/
 │   ├── agents/          # Persona definitions (@product-mgr, @backend.eng, etc.)
 │   ├── prompts/         # Phase-specific prompts (e.g. prompt-phase-1)
 │   ├── rules/           # Always-on rules (*.mdc)
+│   ├── skills/          # Agent skills (e.g. run-evals)
 │   └── templates/      # PRD, SAD, MR templates
 ├── project-context/
 │   ├── 1.define/        # MRD, PRD, SAD outputs
@@ -217,6 +221,7 @@ your-project/
 │   ├── agents/          # Persona definitions (Claude Code format)
 │   ├── commands/        # Slash commands (e.g. phase-1-define)
 │   ├── rules/           # Individual rule files (*.md)
+│   ├── skills/          # Agent skills (e.g. run-evals, native Claude Code skills)
 │   └── settings.json    # Permissions, AAMAD_TARGET_RUNTIME env
 ├── .cursor/
 │   └── templates/       # PRD, SAD, MR templates (shared)
@@ -254,7 +259,7 @@ your-project/
 ├── .github/
 │   ├── instructions/   # Copilot instructions (*.instructions.md)
 │   ├── agents/         # Custom agents (*.agent.md) with optional handoffs
-│   └── prompts/        # Phase 1 prompt (phase-1-define.prompt.md)
+│   └── prompts/        # Phase 1 prompt, sync-docs, run-evals (phase-1-define.prompt.md, ...)
 ├── .vscode/
 │   └── settings.json   # chat.instructionsFilesLocations, chat.agentFilesLocations
 ├── .cursor/
@@ -329,10 +334,11 @@ Inspect bundle contents: `aamad bundle-info --verbose` or `aamad bundle-info --i
     │   ├─ agents/       # Agent persona definitions
     │   ├─ prompts/      # Phase-specific prompts
     │   ├─ rules/        # Architecture, workflow, epics rules
+    │   ├─ skills/        # Agent skills (e.g. run-evals)
     │   └─ templates/    # PRD, SAD, MR templates
     ├─ project-context/
     │   ├─ 1.define/     # PRD, SAD, research reports
-    │   ├─ 2.build/      # Setup, frontend, backend, integration, QA
+    │   ├─ 2.build/      # Setup, frontend, backend, integration, QA, evals
     │   └─ 3.deliver/    # deploy runbook and configs
     ├─ docs/
     ├─ CHECKLIST.md
@@ -389,12 +395,13 @@ Each role is embodied by an agent persona, defined in `.cursor/agents/` (Cursor)
 Before implementation, set `AAMAD_TARGET_RUNTIME` to the target backend runtime (`crewai` default, `claude-agent-sdk` supported, `cursor-sdk` supported).
 Phase 2 is executed by running each epic in sequence after completing Phase 1:
 
-- **Architecture:** Generate solution architecture document (`sad.md`)
+- **Architecture:** Generate solution architecture document (`sad.md`), including eval criteria via `*define-eval-criteria` (accuracy, latency, safety, security, cost thresholds in SAD §9)
 - **Setup:** Scaffold environment, install dependencies, and document (`setup.md`)
 - **Frontend:** Build UI + placeholders, document (`frontend.md`)
 - **Backend:** Implement backend for the selected runtime, document (`backend.md`)
 - **Integration:** Wire up chat flow, verify, document (`integration.md`)
 - **Quality Assurance:** Run `*test-unit` and `*test-integration`, then smoke/acceptance (`*qa`); map tests to acceptance-criteria IDs when present; log in `qa.md`
+- **Evals (recommended):** `*run-evals` — golden dataset, code-based checks, LLM-as-judge scoring, and production monitoring recommendations for DevOps; logged in `evals.md`. Already past QA on an existing project? Run `*run-evals` directly — it asks you for any missing thresholds instead of blocking (see `.cursor/skills/run-evals/`).
 - **Security (recommended):** `@security.eng` → `security.md` before Deliver (required when `aamad.config.yml` sets `security.require_security_assessment: true`)
 
 Artifacts are versioned and stored in `project-context/2.build` for traceability.
@@ -405,8 +412,8 @@ Artifacts are versioned and stored in `project-context/2.build` for traceability
 
 After QA (and preferably security), invoke `@devops.eng`:
 
-- **Release readiness:** Confirm `qa.md` (and note `security.md` status)
-- **Deploy / CI:** Minimal deploy and pipeline config aligned with SAD and `AAMAD_TARGET_RUNTIME`
+- **Release readiness:** Confirm `qa.md` (and note `evals.md` and `security.md` status)
+- **Deploy / CI:** Minimal deploy and pipeline config aligned with SAD and `AAMAD_TARGET_RUNTIME`, incorporating `evals.md`'s Production Monitoring Recommendations (trace fields, dashboards, alert thresholds)
 - **Runbook:** `project-context/3.deliver/deploy.md` (hosting, env matrix, access, rollback)
 - **User docs:** `*document-user-guide` → `project-context/3.deliver/user-guide.md`
 - **Validate:** `aamad validate --phase deliver`

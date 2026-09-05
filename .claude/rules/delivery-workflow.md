@@ -6,14 +6,15 @@
 
 ## Phase Gate
 - Do not start Deliver work until `project-context/2.build/qa.md` exists and documents MVP verification results (pass or explicitly scoped known gaps).
+- Prefer `project-context/2.build/evals.md` from `@qa.eng` before Deliver; its Production Monitoring Recommendations feed deploy.md's monitoring/observability config. If missing, continue and record the gap under deploy.md Assumptions.
 - Prefer `project-context/2.build/security.md` from `@security.eng` before Deliver. If security.md is missing, continue only when the operator accepts the gap and record it under deploy.md Assumptions (required when `aamad.config.yml` sets `security.require_security_assessment: true`).
-- Required inputs: qa.md, backend.md, frontend.md, integration.md, PRD, and SAD (including DevOps and Deployment Architecture). Optional but recommended: security.md.
+- Required inputs: qa.md, backend.md, frontend.md, integration.md, PRD, and SAD (including DevOps and Deployment Architecture). Optional but recommended: evals.md, security.md.
 - On missing prerequisites, halt and write a Diagnostic section in deploy.md with blockers and safe retry steps.
 
 ## Deliver Module Structure
 Execute delivery in focused steps with fresh context when possible:
 
-1. **Release readiness** — QA (and security) gate check and release notes (`*prepare-release`).
+1. **Release readiness** — QA, evals, and security gate check and release notes (`*prepare-release`).
 2. **Deploy definition** — Runtime-aligned container or platform config (`*define-deploy`).
 3. **CI scaffolding** — Minimal lint/test/build pipeline config only (`*configure-cicd`).
 4. **Runbook** — Hosting, env matrix, access control, rollback (`*document-deploy`).

@@ -1,7 +1,7 @@
 # AAMAD Agent Framework
 
 This project uses the AAMAD framework for multi-agent development.
-Framework version: 0.7.5
+Framework version: 0.8.0
 See the full agent definitions in the IDE-specific directories.
 
 ## Agent Personas
